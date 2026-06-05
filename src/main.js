@@ -9,10 +9,12 @@ import { BUILTIN_THEMES, TOKENS, TOKEN_NAMES, DEFAULT_THEME_ID, validateTheme } 
 const DEFAULT_DATA = {
   title: "Example Project Plan",
   note: "A sample plan — workstreams scheduled across shared compute. This is demo data; edit it or paste your own JSON.",
-  clusters: [
-    { label: "Cluster A online", date: "2026-02-01", color: "#5f7488" },
-    { label: "Cluster B online", date: "2026-04-01", color: "#5f7488" },
-    { label: "GPU expansion",    date: "2026-06-01", color: "#8a6a44" }
+  // Dated markers pinned to a band edge (a workstream name, or "@compute").
+  annotations: [
+    { text: "Cluster A online", date: "2026-02-01", target: "@compute", edge: "bottom", icon: "↓" },
+    { text: "Cluster B online", date: "2026-04-01", target: "@compute", edge: "bottom", icon: "↓" },
+    { text: "GPU expansion",    date: "2026-06-01", target: "@compute", edge: "bottom", icon: "↓", color: "#8a6a44" },
+    { text: "Kickoff",          date: "2026-02-01", target: "Build",     edge: "top",    icon: "↓" }
   ],
   // Capacity windows (name matches each task's `cluster`). Rendered below the
   // workstreams as utilization lanes: grey where idle, colored where in use.
@@ -308,7 +310,7 @@ function computeLayout(data, containerWidth) {
       y += laneEnd.length * MILESTONE_ROW_HEIGHT;
     }
     wsLayouts.push({
-      name: ws.name, note: ws.note, y: wsY,
+      name: ws.name, note: ws.note, y: wsY, yBottom: y, // band top / bottom (for annotations)
       color: WORKSTREAM_COLORS[wi % WORKSTREAM_COLORS.length],
       tasks: taskLayouts, milestones: milestoneLayouts
     });
@@ -398,7 +400,7 @@ function computeLayout(data, containerWidth) {
       });
       y += slotH;
     }
-    capacityLayout = { y: capY, rows };
+    capacityLayout = { y: capY, yBottom: y, headerY: capY + WS_HEADER_HEIGHT, rows };
     y += WS_GAP;
   }
 
@@ -563,28 +565,40 @@ function renderSVG(data, layout) {
     }, MONTH_NAMES[sMo] + (sMo === 0 ? " " + layout.minDate.getFullYear() : "")));
   }
 
-  // Cluster drop markers — labels only (no full-height line); the month grid
-  // provides the only vertical structure. Each drop reads as a colored ↓ label.
-  // Hidden with the compute-capacity section (they're compute annotations).
-  if (showCapacity && Array.isArray(data.clusters)) {
-    for (const c of data.clusters) {
-      const cd = parseDate(c.date);
-      if (cd < layout.minDate || cd > layout.maxDate) continue;
+  // Annotations — dated markers pinned to a band edge (a workstream, or the
+  // compute section "@compute"). Double-click to edit. The month grid provides
+  // the vertical structure; each reads as a coloured "↓ label".
+  if (Array.isArray(data.annotations)) {
+    data.annotations.forEach((a, ai) => {
+      if (!a || !a.date) return;
+      const cd = parseDate(a.date);
+      if (cd < layout.minDate || cd > layout.maxDate) return;
+      // Resolve the target band → y position + default colour
+      let bandY, defColor;
+      if (a.target === "@compute") {
+        if (!layout.capacity) return; // compute section hidden
+        bandY = (a.edge === "top") ? layout.capacity.headerY - 4 : layout.capacity.yBottom + 11;
+        defColor = MUTED_TEXT;
+      } else {
+        const wl = layout.workstreams.find((w) => w.name === a.target);
+        if (!wl) return; // unknown or hidden workstream
+        bandY = (a.edge === "top") ? wl.y - 4 : wl.yBottom + 11;
+        defColor = wl.color;
+      }
       const cx = layout.timeToX(cd);
-      const col = c.color || "#7a8a6a";
-      const labelStr = "↓ " + c.label;
-      // Left-align at the drop date (the cluster's online edge); flip to right-anchor
-      // only if it would spill off the right edge
+      const col = a.color || defColor;
+      const labelStr = (a.icon || "↓") + " " + (a.text || "");
       const w = measureText(labelStr, 10);
-      const edge = 3;
       let lx = cx, anchor = "start";
-      if (cx + w > layout.svgWidth - edge) { lx = layout.svgWidth - edge; anchor = "end"; }
-      svg.appendChild(el("text", {
-        x: lx, y: layout.svgHeight - 8,
+      if (cx + w > layout.svgWidth - 3) { lx = layout.svgWidth - 3; anchor = "end"; }
+      const t = el("text", {
+        x: lx, y: bandY, cursor: "pointer",
         "font-family": '"ET Book", Palatino, Georgia, serif',
         "font-size": "10", fill: col, "text-anchor": anchor
-      }, labelStr));
-    }
+      }, labelStr);
+      t.addEventListener("dblclick", (e) => { e.preventDefault(); openAnnotationModal(ai); });
+      svg.appendChild(t);
+    });
   }
 
   // Today line
@@ -614,13 +628,15 @@ function renderSVG(data, layout) {
 
   // Workstreams
   for (const ws of layout.workstreams) {
-    // Workstream header
-    svg.appendChild(el("text", {
-      x: layout.chartLeft, y: ws.y + 18,
+    // Workstream header — double-click to add an annotation to this workstream
+    const wsHdr = el("text", {
+      x: layout.chartLeft, y: ws.y + 18, cursor: "pointer",
       "font-family": '"ET Book", Palatino, Georgia, serif',
       "font-size": "14", fill: HEADING, "font-weight": "bold",
       "letter-spacing": "0.3"
-    }, ws.name));
+    }, ws.name);
+    wsHdr.addEventListener("dblclick", ((nm) => (e) => { e.preventDefault(); openAnnotationModal(null, { target: nm, edge: "top" }); })(ws.name));
+    svg.appendChild(wsHdr);
 
     // Workstream note
     if (ws.note) {
@@ -1165,7 +1181,7 @@ function renderFromModel() {
 // Parse editor text \u2192 become the model (one-way: text \u2192 model \u2192 render)
 function loadModelFromText(text) {
   try {
-    const data = JSON.parse(text);
+    const data = migrateModel(JSON.parse(text));
     validate(data);
     model = data;
     renderFromModel();
@@ -1222,6 +1238,15 @@ function updateUrl() { schedulePersist(); }
 // \u2500\u2500\u2500 small utils \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 const clone = (o) => JSON.parse(JSON.stringify(o));
 const sameJSON = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+// Back-compat: the old `clusters` date markers are now first-class `annotations`
+// pinned to the compute section's bottom edge. Convert + drop `clusters` on load.
+function migrateModel(m) {
+  if (m && Array.isArray(m.clusters) && !Array.isArray(m.annotations)) {
+    m.annotations = m.clusters.map((c) => ({ text: c.label, date: c.date, target: "@compute", edge: "bottom", color: c.color, icon: "↓" }));
+  }
+  if (m && "clusters" in m) delete m.clusters;
+  return m;
+}
 
 // ─── content-addressed history (git-style) ───────────────────────
 // Canonical JSON: object keys sorted recursively so semantically identical models
@@ -1386,7 +1411,7 @@ function diffModel(a, b) {
   const meta = [];
   if ((a.title || "") !== (b.title || "")) meta.push("title");
   if ((a.note || "") !== (b.note || "")) meta.push("note");
-  if (!sameJSON(a.clusters, b.clusters)) meta.push("clusters");
+  if (!sameJSON(a.annotations, b.annotations)) meta.push("annotations");
   if (!sameJSON(a.capacity, b.capacity)) meta.push("capacity");
   if (!sameJSON((a.workstreams || []).map((w) => w.name), (b.workstreams || []).map((w) => w.name))) meta.push("workstreams");
   return { tasks, milestones, meta };
@@ -1656,7 +1681,7 @@ function createPlanObj(name, modelData) {
 }
 // A brand-new plan starts empty — no workstreams, tasks, clusters or capacity.
 function emptyModel(name) {
-  return { title: name || "Untitled plan", note: "", clusters: [], capacity: [], workstreams: [] };
+  return { title: name || "Untitled plan", note: "", annotations: [], capacity: [], workstreams: [] };
 }
 // Pull a stored plan into the live globals (model/history/toggles/meta).
 function adoptPlan(p) {
@@ -2045,6 +2070,8 @@ function openHelpModal() {
     row("double-click \u201cCompute capacity\u201d", "Add a new cluster"),
     row("drag a lane handle", "Move a cluster\u2019s retire date or a change-event"),
     row("right-click a capacity lane", "Quick menu: edit / duplicate / reorder / delete"),
+    row("double-click a workstream name", "Add an annotation to that band"),
+    row("double-click an annotation", "Edit / delete that annotation"),
     row("hover a bar or pool", "Highlight the linked capacity / activities"),
   ].join("");
   const tree = [
@@ -2944,6 +2971,57 @@ function openClusterModal(capIndex) {
   }
 }
 
+// ─── Annotation editor ───────────────────────────────────────────
+// Double-click an annotation to edit, or a workstream name to add one. Saves via
+// the annotation ops (addAnnotation / updateAnnotation / removeAnnotation), so
+// every change is one undo-tree node and matches the skill/LLM path.
+function openAnnotationModal(index, presets) {
+  const adding = index == null;
+  const a = adding
+    ? { text: "", date: new Date().toISOString().slice(0, 10), target: (presets && presets.target) || "@compute", edge: (presets && presets.edge) || "bottom", icon: "↓", color: "" }
+    : clone(model.annotations[index]);
+  const targets = [...model.workstreams.map((w) => w.name), "@compute"];
+  const tgtOpts = targets.map((t) => `<option value="${esc(t)}"${t === a.target ? " selected" : ""}>${t === "@compute" ? "Compute capacity" : esc(t)}</option>`).join("");
+  const edgeOpts = ["bottom", "top"].map((e) => `<option value="${e}"${(a.edge || "bottom") === e ? " selected" : ""}>${e}</option>`).join("");
+  const icons = ["↓", "↑", "◆", "●", "▲", "★", "🚀", "✅", "⚠️"];
+  const palette = (Array.isArray(WORKSTREAM_COLORS) ? WORKSTREAM_COLORS.slice() : []);
+  if (a.color && !palette.includes(a.color)) palette.unshift(a.color);
+  const swatches = palette.map((c) => `<button type="button" class="sw" data-color="${esc(c)}" style="background:${esc(c)}" title="${esc(c)}"></button>`).join("")
+    + `<button type="button" class="sw sw-none" data-color="" title="Band colour">∅</button>`;
+  const body =
+    field("Text", `<input id="a-text" type="text" value="${esc(a.text)}" placeholder="e.g. Cluster A online">`) +
+    `<div class="modal-row2">` +
+      field("Date", `<input id="a-date" type="date" value="${esc(a.date || "")}">`) +
+      field("Icon", `<input id="a-icon" type="text" list="a-icon-list" value="${esc(a.icon || "↓")}" style="width:5em"><datalist id="a-icon-list">${icons.map((i) => `<option value="${i}">`).join("")}</datalist>`) +
+    `</div>` +
+    `<div class="modal-row2">` +
+      field("Attach to", `<select id="a-target">${tgtOpts}</select>`) +
+      field("Edge", `<select id="a-edge">${edgeOpts}</select>`) +
+    `</div>` +
+    field("Colour", `<div id="a-swatches" class="sw-row">${swatches}</div><input id="a-color" type="text" value="${esc(a.color || "")}" placeholder="#hex or empty for band colour">`) +
+    (adding ? "" : `<div class="modal-del-row"><span></span><button type="button" id="a-delete" class="modal-del">Delete annotation</button></div>`);
+  openModalShell(adding ? "Add annotation" : "Edit annotation", body, save);
+  modalEl.querySelector("#a-swatches").addEventListener("click", (e) => { const b = e.target.closest(".sw"); if (b) modalEl.querySelector("#a-color").value = b.getAttribute("data-color"); });
+  if (!adding) modalEl.querySelector("#a-delete").addEventListener("click", () => {
+    const r = window.plantt.apply([{ op: "removeAnnotation", index }], "Delete annotation");
+    if (r.ok) closeModal(); else setStatus(r.error, true);
+  });
+  function save() {
+    const g = (id) => modalEl.querySelector("#" + id);
+    const text = g("a-text").value.trim();
+    if (!text) { g("a-text").focus(); return; }
+    const icon = g("a-icon").value.trim() || "↓";
+    const color = g("a-color").value.trim();
+    const ann = { text, date: g("a-date").value, target: g("a-target").value, edge: g("a-edge").value, icon };
+    if (color) ann.color = color;
+    const ops = adding
+      ? [{ op: "addAnnotation", annotation: ann }]
+      : [{ op: "updateAnnotation", index, set: { text, date: ann.date, target: ann.target, edge: ann.edge, icon, color: color || null } }];
+    const r = window.plantt.apply(ops, `${adding ? "Add" : "Edit"} annotation "${text}"`);
+    if (r.ok) closeModal(); else setStatus(r.error, true);
+  }
+}
+
 // Status now lives BELOW the bar and only surfaces problems: errors persist until
 // resolved, transient info flashes then clears, and a valid/parsed plan shows nothing.
 let _statusTimer = null;
@@ -3037,6 +3115,7 @@ const STORAGE_KEY = "plantt-json-legacy"; // legacy key, migrated into a plan on
 // This sets the globals: model, history, currentPlan, showTodayLine, compactMode.
 const hashState = location.hash.length > 1 ? decodeState(location.hash.slice(1)) : null;
 bootstrapPlans(hashState);
+migrateModel(model); // old clusters[] → annotations[]
 applyActiveTheme(false); // set the palette + CSS vars before the first paint
 cm.setValue(JSON.stringify(model, null, 2)); // explicit loadModelFromText below does the first render
 
@@ -3270,11 +3349,6 @@ function _capIndex(m, name) {
   if (i < 0) throw new Error(`No capacity named "${name}"`);
   return i;
 }
-function _clusterIndex(m, label) {
-  const i = (m.clusters || []).findIndex((c) => c.label === label);
-  if (i < 0) throw new Error(`No cluster labelled "${label}"`);
-  return i;
-}
 function _mergeSet(obj, set) { for (const k of Object.keys(set || {})) { if (set[k] === null) delete obj[k]; else obj[k] = set[k]; } }
 
 // Apply ONE op to model `m` (mutates it). Throws on any problem; the batch aborts.
@@ -3359,14 +3433,22 @@ function _applyOp(m, op) {
       const to = Math.max(0, Math.min(m.capacity.length, op.toIndex | 0));
       m.capacity.splice(to, 0, c); break;
     }
-    // — clusters (vertical date markers) — addressed by label —
-    case "addCluster": {
-      if (!m.clusters) m.clusters = [];
-      if (!op.cluster || !op.cluster.label) throw new Error("addCluster needs cluster.label");
-      m.clusters.push(op.cluster); break;
+    // — annotations (dated band-edge markers) — addressed by index —
+    case "addAnnotation": {
+      if (!m.annotations) m.annotations = [];
+      const a = op.annotation;
+      if (!a || !a.text || !a.date || !a.target) throw new Error("addAnnotation needs annotation { text, date, target }");
+      m.annotations.push(a); break;
     }
-    case "updateCluster": { _mergeSet(m.clusters[_clusterIndex(m, op.label)], op.set); break; }
-    case "removeCluster": { m.clusters.splice(_clusterIndex(m, op.label), 1); break; }
+    case "updateAnnotation": {
+      const a = (m.annotations || [])[op.index];
+      if (!a) throw new Error(`No annotation at index ${op.index}`);
+      _mergeSet(a, op.set); break;
+    }
+    case "removeAnnotation": {
+      if (!Array.isArray(m.annotations) || !m.annotations[op.index]) throw new Error(`No annotation at index ${op.index}`);
+      m.annotations.splice(op.index, 1); break;
+    }
     // — plan-level fields (title, note) —
     case "setPlan": { _mergeSet(m, op.set); break; }
     default: throw new Error(`Unknown op: "${op.op}"`);
@@ -3405,7 +3487,7 @@ window.plantt = {
         milestones: (ws.milestones || []).map((m) => ({ name: m.name, date: m.date, emoji: m.emoji, deps: m.deps || [] })),
       })),
       capacity: (model.capacity || []).map((c) => ({ name: c.name, chip: c.chip, chips: c.chips, from: c.from, to: c.to })),
-      clusters: (model.clusters || []).map((c) => ({ label: c.label, date: c.date })),
+      annotations: (model.annotations || []).map((a, i) => ({ index: i, text: a.text, date: a.date, target: a.target, edge: a.edge || "bottom" })),
     };
   },
   get(name) { const f = _findItem(model, name); return f ? clone(f.item) : null; },
@@ -3415,7 +3497,7 @@ window.plantt = {
   // Replace the whole model. Validates first; on failure the live plan is untouched.
   setModel(next, summary) {
     try {
-      validate(next); model = next;
+      migrateModel(next); validate(next); model = next;
       recordChange({ source: "remote", verb: "replace", details: { label: summary || "Remote edit" } });
       commitModel(); return { ok: true };
     } catch (e) { return { ok: false, error: e.message }; }

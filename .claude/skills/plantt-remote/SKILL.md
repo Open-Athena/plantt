@@ -91,7 +91,7 @@ headers that let the page reach loopback (verified on Chrome 148).
 ```jsonc
 {
   "title": "string", "note": "string",
-  "clusters":  [ { "label": "string", "date": "YYYY-MM-DD", "color": "#hex" } ],
+  "annotations": [ { "text": "string", "date": "YYYY-MM-DD", "target": "<workstream name>|@compute", "edge": "top|bottom", "color": "#hex?", "icon": "string? (default ↓)" } ],
   "capacity":  [ {
       "name": "string", "chip": "H100|H200|B200|A100|v4p|v5e|v5p|v6e", "chips": 0,
       "flops": 0, // optional FLOP/s per chip; overrides the chip-type default
@@ -147,8 +147,9 @@ Capacity / compute (by name; tasks reference it via `cluster`):
 - `{op:"removeCapacity", name}` — drops now-dangling `cluster` refs on tasks
 - `{op:"moveCapacity", name, toIndex}` — reorder a pool (lane order)
 
-Clusters / date markers (by label) and plan fields:
-- `{op:"addCluster", cluster:{label,date,color}}` · `{op:"updateCluster", label, set:{...}}` · `{op:"removeCluster", label}`
+Annotations (dated band-edge markers; addressed by index into `annotations`) and plan fields:
+- `{op:"addAnnotation", annotation:{text,date,target,edge?,color?,icon?}}` · `{op:"updateAnnotation", index, set:{...}}` · `{op:"removeAnnotation", index}`
+  - `target` = a workstream name or `"@compute"`; `edge` = `"top"|"bottom"`. (Old `clusters[]` auto-migrate to `@compute` bottom annotations.)
 - `{op:"setPlan", set:{title?, note?}}`
 
 ## Themes (local-only)

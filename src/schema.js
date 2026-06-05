@@ -57,9 +57,11 @@ export const SCHEMA = {
   fields: {
     title: "string — plan title",
     note: "string? — subtitle/description",
-    clusters:
-      "array? of vertical date markers: { label:string, date:'YYYY-MM-DD', color:'#hex' }. " +
-      "Purely visual lines; NOT the compute pools (those are `capacity`).",
+    annotations:
+      "array? of dated markers pinned to a band edge: { text:string, date:'YYYY-MM-DD', " +
+      "target:'<workstream name>'|'@compute' (the compute-capacity section), " +
+      "edge:'top'|'bottom' (default 'bottom'), color?:'#hex' (defaults to the band colour), " +
+      "icon?:string (default '↓') }. Free-form labels; NOT the compute pools (those are `capacity`).",
     capacity:
       "array? of compute pools (utilization lanes under the chart): { name:string (referenced " +
       "by a task's `cluster`), chip:<one of chips>, chips:number (initial count at `from`), " +
@@ -118,16 +120,17 @@ export const OPS = {
   renameCapacity: "{ name, to } — rename a pool; repoints task.cluster refs",
   removeCapacity: "{ name } — remove a pool; drops now-dangling task.cluster refs",
   moveCapacity: "{ name, toIndex } — reorder a pool (lane order)",
-  addCluster: "{ cluster:{label,date,color} } — add a date marker",
-  updateCluster: "{ label, set:{...} }",
-  removeCluster: "{ label }",
+  // — annotations (dated band-edge markers) — addressed by index into `annotations` —
+  addAnnotation: "{ annotation:{ text, date, target:'<workstream>'|'@compute', edge?:'top'|'bottom', color?, icon? } }",
+  updateAnnotation: "{ index, set:{...} }",
+  removeAnnotation: "{ index }",
   setPlan: "{ set:{ title?, note? } } — plan-level fields",
 };
 
 // A minimal valid plan, used in describe() and asserted by the test to pass validate().
 export const EXAMPLE = {
   title: "Example",
-  clusters: [{ label: "Cluster A online", date: "2026-02-01", color: "#5f7488" }],
+  annotations: [{ text: "Cluster A online", date: "2026-02-01", target: "@compute", edge: "bottom", icon: "↓" }],
   capacity: [{ name: "Cluster A", chip: "H100", chips: 128, from: "2026-02-01", color: "#5f7488" }],
   workstreams: [
     {
