@@ -887,8 +887,9 @@ function renderSVG(data, layout) {
       const mcl = (model.capacity || []).find((c) => c.name === row.name);
       const ci = mcl ? model.capacity.indexOf(mcl) : -1;
       if (ci >= 0) {
+        // Invisible grab targets — keep the drag affordance without drawing dots.
         const mkHandle = (x, onDown) => {
-          const h = el("circle", { cx: x, cy: row.centerY, r: 4.5, fill: row.color, stroke: BACKGROUND, "stroke-width": 1.5, cursor: "ew-resize" });
+          const h = el("rect", { x: x - 5, y: row.centerY - row.slotH / 2, width: 10, height: row.slotH, fill: "transparent", cursor: "ew-resize" });
           h.addEventListener("pointerdown", onDown);
           h.addEventListener("contextmenu", (e) => showCapMenu(e, ci));
           svg.appendChild(h);
