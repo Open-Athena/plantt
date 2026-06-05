@@ -1138,7 +1138,7 @@ function loadModelFromText(text) {
     validate(data);
     model = data;
     renderFromModel();
-    setStatus("Valid JSON \u2713", false);
+    setStatus("", false); // valid \u2192 clear (no persistent "valid" badge)
     schedulePersist(); // history nodes for text edits are recorded on blur, not per keystroke
     updateUrl();
   } catch (e) {
@@ -1151,7 +1151,7 @@ function loadModelFromText(text) {
 function commitModel() {
   writeEditor(JSON.stringify(model, null, 2));
   renderFromModel();
-  setStatus("Valid JSON \u2713", false);
+  setStatus("", false); // valid \u2192 clear
   schedulePersist();
   updateUrl();
   editorBaseline = null; // our own write shouldn't be re-recorded on the next blur
@@ -1997,7 +1997,7 @@ function openHelpModal() {
     row(k(mod) + k("\u21e7") + k("Z"), "Redo"),
     row(k("Ctrl") + k("Y"), "History tree"),
     row(k("Ctrl") + k("O"), "Plans"),
-    row(k("Ctrl") + k("T"), "Themes"),
+    row(k("Ctrl") + k("T"), "Appearance (themes + view toggles)"),
     row(k("/"), "Show / hide workstreams (↑↓ or j/k, Enter to toggle)"),
     row(k("c"), "Show / hide the compute-capacity section"),
     row(k("d"), "Cycle dependency lines: all → red only → off (hover reveals a chain)"),
@@ -2658,10 +2658,17 @@ function openMilestoneModal(wsIndex, msIndex) {
   });
 }
 
+// Status now lives BELOW the bar and only surfaces problems: errors persist until
+// resolved, transient info flashes then clears, and a valid/parsed plan shows nothing.
+let _statusTimer = null;
 function setStatus(msg, isError) {
   const el = document.getElementById("status-msg");
-  el.textContent = msg;
-  el.className = isError ? "error" : "";
+  if (!el) return;
+  clearTimeout(_statusTimer);
+  el.textContent = msg || "";
+  el.classList.toggle("error", !!isError);
+  el.classList.toggle("hidden", !msg);
+  if (msg && !isError) _statusTimer = setTimeout(() => { el.textContent = ""; el.classList.add("hidden"); }, 2500);
 }
 
 // ─── CodeMirror Setup ────────────────────────────────────────────

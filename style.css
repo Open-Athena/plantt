@@ -47,8 +47,13 @@ body { font-family: var(--font-serif);
 #panel-header { display: flex; align-items: center; justify-content: space-between;
   padding: 4px 12px 7px; background: var(--surface); border-bottom: 1px solid var(--border);
   flex-shrink: 0; font-size: 13px; }
-#status-msg { color: var(--muted); font-family: var(--font-mono); font-size: 12px; }
+/* Status strip below the bar — only shown for errors / transient info, hidden when valid. */
+#status-msg {
+  flex-shrink: 0; font-family: var(--font-mono); font-size: 12px; color: var(--heading);
+  padding: 4px 12px; background: var(--surface); border-bottom: 1px solid var(--border);
+}
 #status-msg.error { color: var(--danger); }
+#status-msg.hidden { display: none; }
 #close-btn { background: none; border: none; cursor: pointer; font-size: 16px;
   color: var(--muted); padding: 0 4px; line-height: 1; }
 #close-btn:hover { color: var(--heading); }
@@ -139,14 +144,17 @@ body.compact-mode #chart-container { background: var(--surface); padding: 18px; 
 .modal-actions button:hover { filter: brightness(0.97); }
 
 /* ── History / plans toolbar ───────────────────────────────────── */
-#hist-tools { display: inline-flex; gap: 2px; margin-right: 10px; }
-#hist-tools button {
+#hist-tools { display: inline-flex; gap: 4px; }
+.bar-right { display: inline-flex; align-items: center; gap: 6px; }
+#hist-tools button, #help-btn {
   font-family: var(--font-mono); font-size: 13px; line-height: 1;
   color: var(--heading); background: var(--surface); border: 1px solid var(--border); border-radius: 3px;
   height: 24px; padding: 0 7px; cursor: pointer; box-sizing: border-box;
-  display: inline-flex; align-items: center; justify-content: center;
+  display: inline-flex; align-items: center; justify-content: center; gap: 5px;
 }
-#hist-tools button:hover:not(:disabled) { filter: brightness(0.97); }
+/* History / Plans carry a text label next to the icon. */
+#hist-tools button.labeled { padding: 0 9px; font-size: 12px; }
+#hist-tools button:hover:not(:disabled), #help-btn:hover { filter: brightness(0.97); border-color: var(--dep-hl); }
 #hist-tools button:disabled { opacity: 0.35; cursor: default; }
 
 /* ── History visualizer ────────────────────────────────────────── */
@@ -315,7 +323,7 @@ body.compact-mode #chart-container { background: var(--surface); padding: 18px; 
   position: fixed; right: 12px; bottom: 60px; z-index: 150; width: 282px;
   background: var(--surface); color: var(--fg); border: 1px solid var(--border);
   border-radius: 6px; box-shadow: 0 8px 30px rgba(0,0,0,0.18); padding: 12px 14px;
-  font-family: var(--font-serif); font-size: 13px;
+  font-family: var(--font-serif); font-size: 13px; max-height: 80vh; overflow: auto;
 }
 #theme-popover[hidden] { display: none; }
 .tp-title { font-size: 15px; margin-bottom: 8px; }
@@ -324,6 +332,10 @@ body.compact-mode #chart-container { background: var(--surface); padding: 18px; 
 .tp-row select { flex: 1; max-width: 172px; font-family: var(--font-mono); font-size: 12px;
   background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 3px; padding: 3px 4px; }
 .tp-active { font-family: var(--font-mono); font-size: 11px; color: var(--muted); margin: 6px 0 10px; }
+.tp-section { margin-bottom: 12px; }
+.tp-sec-label { font-family: var(--font-mono); font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin-bottom: 7px; }
+.tp-check { display: flex; align-items: center; gap: 6px; font-family: var(--font-mono); font-size: 12px; color: var(--heading); cursor: pointer; user-select: none; margin: 6px 0; }
+#theme-popover #deps-btn { width: 100%; margin: 0 0 8px; justify-content: flex-start; }
 .tp-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
 .tp-actions button, .tp-file {
   font-family: var(--font-mono); font-size: 11px; cursor: pointer;
