@@ -2055,13 +2055,26 @@ function toggleWsAt(i) {
   schedulePersist();
   renderWsList();
 }
+// One unified, keyboard-navigable list: the workstreams (index 0..n-1) followed by
+// the Compute-capacity row (index n). toggleAt() routes to the right toggle.
+function sectionCount() { return model.workstreams.length + 1; } // + capacity
+function toggleAt(i) {
+  if (i >= model.workstreams.length) { // the compute-capacity row
+    showCapacity = !showCapacity;
+    if (lastValidData) render(lastValidData); // also hides the cluster labels (see render)
+    schedulePersist();
+    renderWsList();
+    return;
+  }
+  toggleWsAt(i);
+}
 function renderWsList() {
   if (!wsModalEl) return;
   const list = wsModalEl.querySelector("#ws-list");
   const wss = model.workstreams;
-  if (!wss.length) { list.innerHTML = '<div class="ws-empty">This plan has no workstreams yet.</div>'; return; }
-  wsSel = Math.max(0, Math.min(wsSel, wss.length - 1));
-  list.innerHTML = wss.map((w, i) => {
+  const capIdx = wss.length;
+  wsSel = Math.max(0, Math.min(wsSel, capIdx)); // capIdx is the last (capacity) row
+  const rows = wss.map((w, i) => {
     const hidden = hiddenWs.has(w.name);
     const nt = (w.tasks || []).length, nm = (w.milestones || []).length;
     return `<div class="ws-row${i === wsSel ? " sel" : ""}${hidden ? " off" : ""}" data-i="${i}">
@@ -2069,22 +2082,27 @@ function renderWsList() {
         <span class="ws-name">${esc(w.name)}</span>
         <span class="ws-count">${nt} task${nt !== 1 ? "s" : ""}${nm ? ` · ${nm} ◆` : ""}</span>
       </div>`;
-  }).join("");
+  });
+  rows.push(`<div class="ws-row${wsSel === capIdx ? " sel" : ""}${showCapacity ? "" : " off"}" data-i="${capIdx}" data-cap="1" style="margin-top:2px">
+        <span class="ws-check">${showCapacity ? "☑" : "☐"}</span>
+        <span class="ws-name">Compute capacity</span>
+        <span class="ws-count">lanes + cluster labels</span>
+      </div>`);
+  list.innerHTML = (wss.length ? "" : '<div class="ws-empty">No workstreams in this plan yet.</div>') + rows.join("");
   list.querySelectorAll(".ws-row").forEach((r) => {
     const i = +r.getAttribute("data-i");
-    r.addEventListener("click", () => { wsSel = i; toggleWsAt(i); });
+    r.addEventListener("click", () => { wsSel = i; toggleAt(i); });
     r.addEventListener("mousemove", () => { if (wsSel !== i) { wsSel = i; renderWsList(); } });
   });
   const sel = list.querySelector(".ws-row.sel");
   if (sel) sel.scrollIntoView({ block: "nearest" });
 }
 function wsKeydown(e) {
-  const n = model.workstreams.length;
+  const n = sectionCount();
   if (e.key === "Escape" || e.key === "/") { e.preventDefault(); e.stopPropagation(); closeWsModal(); return; }
-  if (!n) return;
   if (e.key === "ArrowDown" || e.key === "j") { e.preventDefault(); e.stopPropagation(); wsSel = (wsSel + 1) % n; renderWsList(); }
   else if (e.key === "ArrowUp" || e.key === "k") { e.preventDefault(); e.stopPropagation(); wsSel = (wsSel - 1 + n) % n; renderWsList(); }
-  else if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); toggleWsAt(wsSel); }
+  else if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); toggleAt(wsSel); }
 }
 function openWorkstreamsModal() {
   if (wsModalEl) { closeWsModal(); return; } // pressing / again toggles it closed
@@ -2094,30 +2112,10 @@ function openWorkstreamsModal() {
     `<div id="modal" role="dialog" aria-modal="true" aria-label="Show / hide sections" style="width:460px">
        <div class="modal-title">Show / hide sections <span style="font-size:12px;color:#999">/</span></div>
        <div class="viz-hint" style="margin:-6px 0 10px">↑↓ or j/k to move · Enter/Space to show/hide · Esc to close</div>
-       <div class="modal-body">
-         <div id="ws-list"></div>
-         <div id="cap-row" class="ws-row" title="Show / hide the compute-capacity lanes and cluster labels" style="margin-top:2px">
-           <span class="ws-check"></span>
-           <span class="ws-name">Compute capacity</span>
-           <span class="ws-count">lanes + cluster labels</span>
-         </div>
-       </div>
+       <div class="modal-body"><div id="ws-list"></div></div>
        <div class="modal-actions"><button type="button" data-act="done">Done</button></div>
      </div>`;
   document.body.appendChild(wsModalEl);
-  // Compute-capacity section toggle (mouse-click; workstream list keeps the keyboard nav).
-  const capRow = wsModalEl.querySelector("#cap-row");
-  const paintCap = () => {
-    capRow.classList.toggle("off", !showCapacity);
-    capRow.querySelector(".ws-check").textContent = showCapacity ? "☑" : "☐";
-  };
-  paintCap();
-  capRow.addEventListener("click", () => {
-    showCapacity = !showCapacity;
-    if (lastValidData) render(lastValidData); // also hides the cluster labels (see render)
-    schedulePersist();
-    paintCap();
-  });
   renderWsList();
   document.addEventListener("keydown", wsKeydown, true);
   wsModalEl.addEventListener("pointerdown", (e) => { if (e.target === wsModalEl) closeWsModal(); });
