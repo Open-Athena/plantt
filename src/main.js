@@ -1071,14 +1071,16 @@ function drawDepLayer(svg, data, layout) {
     for (const t of ws.tasks) { pos[t.name] = { xs: t.x1, xe: t.x2, y: t.y }; obstacles.push({ y: t.y, x1: t.x1, x2: t.x2 }); }
     for (const mm of ws.milestones) { pos[mm.name] = { xs: mm.x, xe: mm.x, y: mm.y }; obstacles.push({ y: mm.y, x1: mm.x - 9, x2: mm.x + 9 }); }
   }
-  const STUB = 9, PAD = 6, CLEAR = 2, MAXW = 50;
+  const PAD = 6, CLEAR = 2, MAXW = 50;
   // Pick the vertical channel x that crosses the fewest intermediate-row bars: score by
   // (crossings, then how far outside the endpoints, then deviation from the natural drop).
+  // Prefer the target bar's own edge (toX) so the descent enters the bar directly —
+  // a clean Z with no extra jog. A non-edge channel is only used to dodge bars.
   const pickChannel = (fromX, fromY, toX, toY) => {
     const loX = Math.min(fromX, toX), hiX = Math.max(fromX, toX);
     const loY = Math.min(fromY, toY), hiY = Math.max(fromY, toY);
     const between = obstacles.filter((o) => o.y > loY + 1 && o.y < hiY - 1);
-    const idealX = (toX >= fromX + STUB) ? toX - STUB : fromX;
+    const idealX = (toX >= fromX) ? toX : fromX;
     if (!between.length) return idealX;
     const cands = new Set([fromX, toX, idealX]);
     for (const o of between) { cands.add(o.x1 - PAD); cands.add(o.x2 + PAD); }
