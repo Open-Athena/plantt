@@ -2093,16 +2093,14 @@ function openWorkstreamsModal() {
   wsModalEl.innerHTML =
     `<div id="modal" role="dialog" aria-modal="true" aria-label="Show / hide sections" style="width:460px">
        <div class="modal-title">Show / hide sections <span style="font-size:12px;color:#999">/</span></div>
+       <div class="viz-hint" style="margin:-6px 0 10px">↑↓ or j/k to move · Enter/Space to show/hide · Esc to close</div>
        <div class="modal-body">
-         <div class="sec-head">Sections</div>
-         <div id="cap-row" class="ws-row" title="Show / hide the compute-capacity lanes and cluster labels">
+         <div id="ws-list"></div>
+         <div id="cap-row" class="ws-row" title="Show / hide the compute-capacity lanes and cluster labels" style="margin-top:2px">
            <span class="ws-check"></span>
            <span class="ws-name">Compute capacity</span>
            <span class="ws-count">lanes + cluster labels</span>
          </div>
-         <div class="sec-head" style="margin-top:12px">Workstreams</div>
-         <div class="viz-hint" style="margin:-2px 0 8px">↑↓ or j/k to move · Enter/Space to show/hide · Esc to close</div>
-         <div id="ws-list"></div>
        </div>
        <div class="modal-actions"><button type="button" data-act="done">Done</button></div>
      </div>`;

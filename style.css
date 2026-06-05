@@ -210,7 +210,6 @@ body.compact-mode #chart-container { background: var(--surface); padding: 18px; 
 /* ── Workstreams show/hide list ────────────────────────────────── */
 #ws-list { display: flex; flex-direction: column; gap: 2px; max-height: 48vh; overflow: auto; }
 .ws-empty { color: var(--faint); font-size: 13px; padding: 8px; }
-.sec-head { font-family: var(--font-mono); font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin-bottom: 5px; }
 .ws-row {
   display: flex; align-items: center; gap: 9px; padding: 6px 9px; border-radius: 4px;
   cursor: pointer; font-size: 14px; color: var(--fg); user-select: none;
