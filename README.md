@@ -7,6 +7,8 @@ document you can edit inline, share via URL, and undo/redo through a history tre
 
 **Live:** http://openathena.ai/plantt/
 
+![plantt — example project plan](docs/screenshot.png)
+
 ## Features
 
 - Direct-manipulation editing — drag to move/resize, snap, wire dependencies, edit via modal.
