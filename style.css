@@ -143,7 +143,8 @@ body.compact-mode #chart-container { background: var(--surface); padding: 18px; 
 #hist-tools button {
   font-family: var(--font-mono); font-size: 13px; line-height: 1;
   color: var(--muted); background: var(--surface); border: 1px solid var(--border); border-radius: 3px;
-  padding: 2px 7px; cursor: pointer;
+  height: 24px; padding: 0 7px; cursor: pointer; box-sizing: border-box;
+  display: inline-flex; align-items: center; justify-content: center;
 }
 #hist-tools button:hover:not(:disabled) { filter: brightness(0.97); }
 #hist-tools button:disabled { opacity: 0.35; cursor: default; }
@@ -277,18 +278,22 @@ body.compact-mode #chart-container { background: var(--surface); padding: 18px; 
 .bar-btn {
   font-family: var(--font-mono); font-size: 12px; color: var(--muted);
   background: var(--surface); border: 1px solid var(--border); border-radius: 4px;
-  padding: 3px 8px; cursor: pointer; box-sizing: border-box; white-space: nowrap;
-  margin-right: 8px; box-shadow: 0 1px 2px rgba(0,0,0,0.14);
+  height: 24px; padding: 0 8px; cursor: pointer; box-sizing: border-box; white-space: nowrap;
+  margin-right: 8px; box-shadow: 0 1px 2px rgba(0,0,0,0.14); line-height: 1;
+  display: inline-flex; align-items: center; justify-content: center;
 }
 .bar-btn:hover { color: var(--heading); border-color: var(--dep-hl); }
 .bar-btn:active { box-shadow: inset 0 1px 2px rgba(0,0,0,0.18); }
-#deps-btn { width: 126px; text-align: left; }
-#theme-btn { display: inline-flex; align-items: center; padding: 3px 7px; vertical-align: middle; }
-#theme-btn svg { display: block; }
+#deps-btn { width: 126px; justify-content: flex-start; gap: 6px; }
+#theme-btn { padding: 0 7px; }
+
+/* Inline icons: glyph-sized, centered, currentColor so they follow the theme. */
+.ic { width: 15px; height: 15px; display: block; flex: none; }
+.ic-rot90 { transform: rotate(90deg); }
 
 .bar-toggle {
   font-family: var(--font-mono); font-size: 12px; color: var(--muted);
-  cursor: pointer; user-select: none; margin-right: 8px;
+  cursor: pointer; user-select: none; margin-right: 8px; height: 24px;
   display: inline-flex; align-items: center; gap: 5px;
 }
 /* Custom checkbox so it follows the theme instead of the browser default. */

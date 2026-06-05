@@ -1646,7 +1646,10 @@ function applyTogglesToUI() {
   applyDepsUI();
   document.body.classList.toggle("compact-mode", compactMode);
 }
-function applyDepsUI() { depsBtn.textContent = "Deps: " + DEPS_LABEL[depsMode]; }
+function applyDepsUI() {
+  const lbl = document.getElementById("deps-label");
+  (lbl || depsBtn).textContent = "Deps: " + DEPS_LABEL[depsMode];
+}
 function cycleDeps() {
   depsMode = depsMode === "all" ? "violations" : depsMode === "violations" ? "off" : "all";
   applyDepsUI(); // the button label is the feedback — no redundant status message
