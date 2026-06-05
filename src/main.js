@@ -1107,7 +1107,14 @@ function drawDepLayer(svg, data, layout) {
     // Route through the lowest-crossing vertical channel. When cx === fromX this is a
     // straight drop; otherwise an elbow nudged into a gap between intermediate bars.
     const cx = pickChannel(fromX, fromY, toX, toY);
-    const d = `M ${fromX} ${fromY} H ${cx} V ${toY} H ${toX}`;
+    // Snake straight down (below the row's letters / trailing cluster label) before
+    // turning, so the horizontal run never cuts through the text. Drop toward the
+    // target (down for a lower row, up for a higher one), clamped so it never
+    // overshoots the destination.
+    const DROP = 11;
+    const dir = toY >= fromY ? 1 : -1;
+    const dropY = dir > 0 ? Math.min(fromY + DROP, toY) : Math.max(fromY - DROP, toY);
+    const d = `M ${fromX} ${fromY} V ${dropY} H ${cx} V ${toY} H ${toX}`;
     gEdges.appendChild(el("path", {
       class: "dep-edge" + (backward ? " dep-back" : ""),
       "data-a": predName, "data-b": succName,
