@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>plantt</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.18/codemirror.min.css">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.18/addon/lint/lint.min.css">
+<link rel="stylesheet" href="https://edwardtufte.github.io/et-book/et-book.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<div id="chart-container"></div>
+<div id="tooltip"></div>
+
+<div id="editor-panel">
+  <div id="panel-resizer"></div>
+  <div id="panel-header">
+    <span id="status-msg">Valid JSON &#x2713;</span>
+    <span id="hist-tools">
+      <button id="undo-btn" title="Undo (&#8984;Z)" disabled>&#8617;</button>
+      <button id="redo-btn" title="Redo (&#8984;&#8679;Z)" disabled>&#8618;</button>
+      <button id="history-btn" title="History tree (Ctrl+Y)">&#9202;</button>
+      <button id="plans-btn" title="Plans (Ctrl+O)">&#9776;</button>
+      <button id="help-btn" title="Keyboard &amp; mouse help (?)">?</button>
+    </span>
+    <button id="deps-btn" title="Cycle dependency display (d): all → red only → off" style="font-family:'SF Mono',Menlo,monospace;font-size:12px;color:#555;background:#f4f1e8;border:1px solid #ddd;border-radius:3px;padding:2px 8px;cursor:pointer;margin-right:8px;box-sizing:border-box;width:126px;text-align:left;white-space:nowrap">Deps: all</button>
+    <label style="font-family:'SF Mono',Menlo,monospace;font-size:12px;color:#555;cursor:pointer;user-select:none;margin-right:8px">
+      <input type="checkbox" id="toggle-today" checked style="margin-right:4px;cursor:pointer;vertical-align:-1px">Today line
+    </label>
+    <label style="font-family:'SF Mono',Menlo,monospace;font-size:12px;color:#555;cursor:pointer;user-select:none;margin-right:8px">
+      <input type="checkbox" id="toggle-compact" style="margin-right:4px;cursor:pointer;vertical-align:-1px">Compact 8.5&#8243;
+    </label>
+    <button id="close-btn" title="Close (Ctrl+\)">&times;</button>
+  </div>
+  <div id="editor-wrap"><textarea id="editor"></textarea></div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.18/codemirror.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.18/mode/javascript/javascript.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.18/addon/edit/matchbrackets.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.18/addon/edit/closebrackets.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.18/addon/lint/lint.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.18/addon/lint/json-lint.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jsonlint/1.6.0/jsonlint.min.js"></script>
+<script type="module" src="/src/main.js"></script>
+</body>
+</html>

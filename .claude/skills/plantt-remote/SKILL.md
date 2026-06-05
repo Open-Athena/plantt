@@ -1,0 +1,144 @@
+---
+name: plantt-remote
+description: Edit the active plan in a live plantt tab (hosted or localhost) by natural-language request. Starts a localhost relay, drives the open plantt tab through it, and shuts the relay down when finished. Use when the user wants to change a plan they have open in plantt — move tasks, add workstreams/milestones, adjust capacity, etc.
+---
+
+# plantt remote control
+
+Edit the plan in a **live, open plantt browser tab** — the user's normal browser, no extension or
+browser automation. plantt (with `?agent=1`) polls a small localhost relay you run; you push edits
+through it. Edits go through plantt's own internals, so undo/redo, the JSON editor, the shareable URL
+and persistence all stay consistent.
+
+## How it works
+
+A web page can't listen on a socket, so the **page polls** a relay that **you** run on localhost.
+The relay (`relay.mjs`, next to this file) bridges your `curl` calls to the page:
+
+```
+you ──curl──▶  relay (127.0.0.1:8787)  ◀──fetch poll──  plantt tab (?agent=1, in the user's browser)
+   POST /edit                              GET /poll  → applies via window.plantt.setModel
+   GET  /state                             POST /ack  → echoes fresh state back
+```
+
+This works even for a **hosted HTTPS** plantt tab: the relay sends Private Network Access + CORS
+headers that let the page reach loopback (verified on Chrome 148).
+
+## Procedure
+
+1. **Start the relay** (idempotent — skip if `/status` already answers):
+   ```bash
+   curl -s --max-time 1 http://127.0.0.1:8787/status \
+     || node "<this-skill-dir>/relay.mjs" >/tmp/plantt-relay.log 2>&1 &
+   ```
+   Use this skill's own directory for the path. Give it ~1s, then confirm:
+   `curl -s http://127.0.0.1:8787/status`.
+
+2. **Get the tab connected.** Ask the user to open their plan in plantt with `?agent=1` appended,
+   e.g. `https://THEIR-HOST/?agent=1` (or `http://localhost:5173/?agent=1` for local dev). If they
+   run the relay on a non-default port, also append `&relay=http://127.0.0.1:PORT`. A "● remote:
+   connected" badge appears bottom-right. Poll `/status` until `connected:true` (give up after ~30s
+   and tell the user the tab isn't reachable).
+
+3. **Read what exists** before editing. Prefer the compact `/outline` over the full `/state` —
+   it's names, deps, and dates only, so it costs far fewer tokens:
+   ```bash
+   curl -s http://127.0.0.1:8787/outline             # → { ok, outline: {...} }  (compact)
+   curl -s 'http://127.0.0.1:8787/deps?name=Launch'  # → { ok, deps: [...] }      (prerequisites)
+   curl -s 'http://127.0.0.1:8787/dependents?name=Evals'   # who depends on Evals
+   curl -s 'http://127.0.0.1:8787/get?name=Launch'   # → { ok, item: {...} }  (one full item)
+   curl -s http://127.0.0.1:8787/state               # → { ok, state:{uuid,name,model} }  (full)
+   ```
+
+4. **Apply the edit with `/apply`** — a batch of name-addressed ops applied atomically as ONE undo
+   step. Don't read-modify-write the whole model unless you truly need to:
+   ```bash
+   curl -s -X POST http://127.0.0.1:8787/apply \
+     -H 'content-type: application/json' \
+     -d '{ "summary": "Push launch + add review gate", "ops": [
+            { "op":"update", "name":"Launch", "set":{ "date":"2026-11-15" } },
+            { "op":"addMilestone", "workstream":"Post-training",
+              "milestone":{ "name":"Launch review", "date":"2026-11-01", "emoji":"✅", "deps":["Evals"] } }
+          ] }'
+   ```
+   Response: `{ ok, error, applied }`. If `ok:false` the WHOLE batch was rejected and the live plan
+   is untouched — read `error` (it names the failing `op[i]`), fix, retry. `summary` becomes the
+   undo label. (The whole-model `POST /edit { model, summary }` still exists as a fallback.)
+
+5. **Verify** by reading `/state` back (or just trust the `state` returned by `/edit`) and tell the
+   user what changed. They can watch it update and undo it with Cmd/Ctrl-Z if they dislike it.
+
+6. **Always shut the relay down when the task is done** (no auth token guards it, so don't leave it
+   running):
+   ```bash
+   curl -s -X POST http://127.0.0.1:8787/shutdown
+   ```
+
+## Plan model schema (for step 4)
+
+```jsonc
+{
+  "title": "string", "note": "string",
+  "clusters":  [ { "label": "string", "date": "YYYY-MM-DD", "color": "#hex" } ],
+  "capacity":  [ {
+      "name": "string", "chip": "H100|H200|B200|A100|v4p|v5e|v5p|v6e", "chips": 0,
+      "from": "YYYY-MM-DD", "to": "YYYY-MM-DD?", "color": "#hex",
+      "grows": [ { "date": "YYYY-MM-DD", "to": 0 } ], "note": "string?"
+  } ],
+  "workstreams": [ {
+      "name": "string", "note": "string?",
+      "tasks": [ {
+          "name": "string (unique across ALL tasks AND milestones)",
+          "start": "<taskName> | [\"date\",\"YYYY-MM-DD\"] | [\"after\",\"<taskName>\",[\"days\",N]]",
+          "end":   "[\"days\"|\"weeks\"|\"months\",N] | [\"date\",\"YYYY-MM-DD\"]",
+          "significance": 0, "cluster": "<capacity.name>?", "chips": 0,
+          "link": "url?", "tooltip": "markdown?", "deps": ["<itemName>"]
+      } ],
+      "milestones": [ {
+          "name": "string (unique)", "date": "YYYY-MM-DD",
+          "emoji": "string?", "line": "#hex?", "tooltip": "markdown?", "deps": ["<itemName>"]
+      } ]
+  } ]
+}
+```
+
+Validation rules plantt enforces (mirror them, or `/edit` will reject):
+- `workstreams` is required and an array; every workstream needs a `name` and a `tasks` array.
+- Every task/milestone needs a `name`, and names are **unique across all tasks and milestones**.
+- `deps` must be arrays of names that exist somewhere in the plan.
+- `cluster` on a task should reference an existing `capacity[].name`.
+
+## `/apply` op vocabulary
+
+Each op is addressed by **name** (plantt is name-keyed, not index-keyed). Ops run in order on a
+working copy; the batch is validated once at the end. `set` merges fields; `set:{field:null}` deletes
+a field.
+
+Items (tasks + milestones), addressed by their unique name:
+- `{op:"addTask", workstream, task:{...}}` · `{op:"addMilestone", workstream, milestone:{...}}`
+- `{op:"update", name, set:{...}}` — patch fields (NOT name; use rename)
+- `{op:"rename", name, to}` — **auto-repoints every dependent's deps**
+- `{op:"setDeps", name, deps:[...]}`
+- `{op:"remove", name}` — **auto-strips this name from all other deps**
+- `{op:"moveTask", name, toWorkstream}`
+
+Workstreams (by name):
+- `{op:"addWorkstream", workstream:{name,note?,tasks?,milestones?}}` (or `{op:"addWorkstream", name, note?}`)
+- `{op:"renameWorkstream", name, to}` · `{op:"updateWorkstream", name, set:{...}}`
+- `{op:"removeWorkstream", name}` (drops its items + cleans deps) · `{op:"moveWorkstream", name, toIndex}`
+
+Capacity / compute (by name; tasks reference it via `cluster`):
+- `{op:"addCapacity", capacity:{...}}` · `{op:"updateCapacity", name, set:{...}}`
+- `{op:"renameCapacity", name, to}` — **repoints task.cluster refs**
+- `{op:"removeCapacity", name}` — drops now-dangling `cluster` refs on tasks
+
+Clusters / date markers (by label) and plan fields:
+- `{op:"addCluster", cluster:{label,date,color}}` · `{op:"updateCluster", label, set:{...}}` · `{op:"removeCluster", label}`
+- `{op:"setPlan", set:{title?, note?}}`
+
+## Notes & limits
+
+- Enabled only with `?agent=1`; a normal plantt visit exposes nothing.
+- Latency is near-instant (long-poll). If the badge shows "offline", the relay was killed or the
+  tab was closed — restart from step 1.
+- One tab at a time. The relay serves whichever `?agent=1` tab is polling it.
