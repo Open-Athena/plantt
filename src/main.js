@@ -938,7 +938,10 @@ function renderSVG(data, layout) {
   svg.appendChild(chBg);
   svg.appendChild(chText);
 
-  hlOverlay = el("g", {}); // hover highlights drawn here (updated in place, no re-render)
+  // Hover highlights drawn here (updated in place, no re-render). It sits ON TOP of
+  // the bars' hit rects, so it MUST be pointer-transparent — otherwise the highlight
+  // stroke steals events from the bar underneath, toggling the hover (flicker).
+  hlOverlay = el("g", { "pointer-events": "none" });
   svg.appendChild(hlOverlay);
 
   return svg;
