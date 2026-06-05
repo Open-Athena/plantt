@@ -91,7 +91,8 @@ function chipType(cl) {
   if (n.includes("V6E")) return "v6e";
   return null;
 }
-function chipFlops(cl) { return FLOPS_PER_CHIP[chipType(cl)] || 0; }
+// Per-chip FLOP/s: an explicit `flops` override wins, else the known default for the chip type.
+function chipFlops(cl) { return (typeof cl.flops === "number" && cl.flops > 0) ? cl.flops : (FLOPS_PER_CHIP[chipType(cl)] || 0); }
 function capCluster(data, name) { return (data.capacity || []).find(c => c.name === name) || null; }
 function capChipsAt(cl, date) {
   let chips = cl.chips || 0, best = -Infinity;       // latest growth on/before `date` wins
@@ -806,12 +807,14 @@ function renderSVG(data, layout) {
   // ─── Capacity / slack lanes (below the workstreams) ───────────────
   if (layout.capacity) {
     const cap = layout.capacity;
-    // Section header
-    svg.appendChild(el("text", {
-      x: layout.chartLeft, y: cap.y + 18,
+    // Section header — double-click to ADD a cluster
+    const capHdr = el("text", {
+      x: layout.chartLeft, y: cap.y + 18, cursor: "pointer",
       "font-family": '"ET Book", Palatino, Georgia, serif',
       "font-size": "14", fill: HEADING, "font-weight": "bold", "letter-spacing": "0.3"
-    }, "Compute capacity"));
+    }, "Compute capacity");
+    capHdr.addEventListener("dblclick", (e) => { e.preventDefault(); openClusterModal(null); });
+    svg.appendChild(capHdr);
     svg.appendChild(el("text", {
       x: layout.chartLeft, y: cap.y + 32,
       "font-family": '"ET Book", Palatino, Georgia, serif',
@@ -869,6 +872,12 @@ function renderSVG(data, layout) {
       });
       hit.addEventListener("mousemove", e => capLaneHover(row.name, row.color, e.clientX));
       hit.addEventListener("mouseleave", clearCapHover);
+      // double-click a lane → edit that cluster
+      hit.addEventListener("dblclick", (e) => {
+        e.preventDefault();
+        const idx = (model.capacity || []).findIndex((c) => c.name === row.name);
+        if (idx >= 0) openClusterModal(idx);
+      });
       svg.appendChild(hit);
     }
   }
@@ -2011,6 +2020,8 @@ function openHelpModal() {
     row(k("\u2325") + " while dragging", "Snap to weeks"),
     row(k(mod) + " while dragging", "Snap to months  (default snaps to days)"),
     row("double-click bar / \u25c6", "Edit the activity / milestone in a dialog"),
+    row("double-click a capacity lane", "Edit that compute cluster"),
+    row("double-click \u201cCompute capacity\u201d", "Add a new cluster"),
     row("hover a bar or pool", "Highlight the linked capacity / activities"),
   ].join("");
   const tree = [
@@ -2674,6 +2685,118 @@ function openMilestoneModal(wsIndex, msIndex) {
     recordChange(desc);
     commitModel(); closeModal();
   });
+}
+
+// ─── Cluster (compute-capacity) editor ───────────────────────────
+// Double-click a lane to edit, or the "Compute capacity" header to add. Saves
+// through the same capacity ops as the skill (addCapacity / updateCapacity /
+// renameCapacity / removeCapacity), so every change is one undo-tree node.
+const KNOWN_CHIPS = Object.keys(FLOPS_PER_CHIP);
+function openClusterModal(capIndex) {
+  const adding = capIndex == null;
+  const cl = adding
+    ? { name: "", chip: "H100", chips: 8, from: new Date().toISOString().slice(0, 10), color: "" }
+    : clone(model.capacity[capIndex]);
+  const pf = (f) => (f ? +(f / 1e15).toFixed(4) : ""); // FLOP/s → PFLOP/s for display
+
+  const palette = (Array.isArray(WORKSTREAM_COLORS) ? WORKSTREAM_COLORS.slice() : []);
+  if (cl.color && !palette.includes(cl.color)) palette.unshift(cl.color);
+  const swatches = palette.map((c) => `<button type="button" class="sw" data-color="${esc(c)}" style="background:${esc(c)}" title="${esc(c)}"></button>`).join("")
+    + `<button type="button" class="sw sw-none" data-color="" title="Default colour">∅</button>`;
+
+  const body =
+    field("Name", `<input id="c-name" type="text" value="${esc(cl.name)}" placeholder="e.g. 512 H100">`) +
+    `<div class="modal-row2">` +
+      field("Chip type", `<input id="c-chip" type="text" list="c-chip-list" value="${esc(cl.chip || "")}" placeholder="H100"><datalist id="c-chip-list">${KNOWN_CHIPS.map((c) => `<option value="${c}">`).join("")}</datalist>`) +
+      field("PFLOP/s per chip", `<input id="c-flops" type="number" step="0.001" min="0" value="${pf(chipFlops(cl))}">`) +
+    `</div>` +
+    `<div class="modal-row2">` +
+      field("Online date", `<input id="c-from" type="date" value="${esc(cl.from || "")}">`) +
+      field("Initial chips", `<input id="c-chips" type="number" min="0" value="${cl.chips != null ? cl.chips : 0}">`) +
+    `</div>` +
+    `<fieldset class="modal-group"><legend>Change events — each sets the new total (add or remove)</legend>` +
+      `<div id="c-grows"></div>` +
+      `<button type="button" id="c-add-grow" class="bar-btn" style="margin-top:6px">+ add event</button>` +
+    `</fieldset>` +
+    `<div class="modal-row2">` +
+      field("Retire (remove all) on", `<input id="c-to" type="date" value="${esc(cl.to || "")}">`) +
+      field("Note (at retirement)", `<input id="c-note" type="text" value="${esc(cl.note || "")}" placeholder="e.g. lost Sep 1">`) +
+    `</div>` +
+    field("Colour", `<div id="c-swatches" class="sw-row">${swatches}</div><input id="c-color" type="text" value="${esc(cl.color || "")}" placeholder="#hex or empty for default">`) +
+    (adding ? "" : `<div class="modal-del-row"><button type="button" id="c-delete" class="modal-del">Delete cluster</button></div>`);
+
+  openModalShell(adding ? "Add cluster" : "Edit cluster", body, save);
+
+  const growsHost = modalEl.querySelector("#c-grows");
+  function addGrowRow(date = "", to = "") {
+    const row = document.createElement("div");
+    row.className = "grow-row";
+    row.innerHTML = `<input type="date" class="g-date" value="${esc(date)}"><span class="g-arrow">→</span>` +
+      `<input type="number" class="g-to" min="0" placeholder="total chips" value="${to === "" ? "" : to}">` +
+      `<button type="button" class="g-del" title="Remove event">×</button>`;
+    row.querySelector(".g-del").addEventListener("click", () => row.remove());
+    growsHost.appendChild(row);
+  }
+  if (Array.isArray(cl.grows)) cl.grows.forEach((g) => addGrowRow(g.date, g.to));
+  modalEl.querySelector("#c-add-grow").addEventListener("click", () => addGrowRow());
+
+  modalEl.querySelector("#c-chip").addEventListener("change", (e) => {
+    const def = FLOPS_PER_CHIP[e.target.value.trim()];
+    if (def) modalEl.querySelector("#c-flops").value = +(def / 1e15).toFixed(4);
+  });
+  modalEl.querySelector("#c-swatches").addEventListener("click", (e) => {
+    const b = e.target.closest(".sw"); if (!b) return;
+    modalEl.querySelector("#c-color").value = b.getAttribute("data-color");
+  });
+  if (!adding) modalEl.querySelector("#c-delete").addEventListener("click", () => {
+    const nm = model.capacity[capIndex].name;
+    const r = window.plantt.apply([{ op: "removeCapacity", name: nm }], `Delete cluster "${nm}"`);
+    if (r.ok) closeModal(); else setStatus(r.error, true);
+  });
+
+  function save() {
+    const g = (id) => modalEl.querySelector("#" + id);
+    const name = g("c-name").value.trim();
+    if (!name) { g("c-name").focus(); return; }
+    const chip = g("c-chip").value.trim();
+    const chips = Math.max(0, parseInt(g("c-chips").value, 10) || 0);
+    const from = g("c-from").value || null;
+    const to = g("c-to").value || null;
+    const note = g("c-note").value.trim() || null;
+    const color = g("c-color").value.trim() || null;
+    // FLOPs: store an override only when it differs from the chip-type default.
+    let flops = null;
+    const pfv = parseFloat(g("c-flops").value);
+    if (pfv > 0) {
+      const val = Math.round(pfv * 1e15), def = FLOPS_PER_CHIP[chip];
+      if (!def || Math.abs(val - def) / def > 0.005) flops = val;
+    }
+    const grows = [...growsHost.querySelectorAll(".grow-row")]
+      .map((r) => ({ date: r.querySelector(".g-date").value, to: parseInt(r.querySelector(".g-to").value, 10) }))
+      .filter((x) => x.date && Number.isFinite(x.to))
+      .sort((a, b) => (a.date < b.date ? -1 : 1));
+
+    let ops, summary;
+    if (adding) {
+      const cap = { name, chip, chips };
+      if (flops != null) cap.flops = flops;
+      if (from) cap.from = from;
+      if (to) cap.to = to;
+      if (note) cap.note = note;
+      if (color) cap.color = color;
+      if (grows.length) cap.grows = grows;
+      ops = [{ op: "addCapacity", capacity: cap }];
+      summary = `Add cluster "${name}"`;
+    } else {
+      const old = model.capacity[capIndex].name;
+      ops = [];
+      if (old !== name) ops.push({ op: "renameCapacity", name: old, to: name });
+      ops.push({ op: "updateCapacity", name, set: { chip, chips, from, to, note, color, flops, grows: grows.length ? grows : null } });
+      summary = `Edit cluster "${name}"`;
+    }
+    const r = window.plantt.apply(ops, summary);
+    if (r.ok) closeModal(); else setStatus(r.error, true);
+  }
 }
 
 // Status now lives BELOW the bar and only surfaces problems: errors persist until

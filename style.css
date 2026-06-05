@@ -143,6 +143,32 @@ body.compact-mode #chart-container { background: var(--surface); padding: 18px; 
 .modal-actions button[data-act="save"] { background: var(--dep-hl); color: var(--bg); border-color: var(--dep-hl); }
 .modal-actions button:hover { filter: brightness(0.97); }
 
+/* Cluster editor: paired rows, colour swatches, change-event rows, delete */
+.modal-row2 { display: flex; gap: 10px; }
+.modal-row2 > .modal-field { flex: 1; min-width: 0; }
+.sw-row { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 5px; }
+.sw {
+  width: 20px; height: 20px; border-radius: 4px; border: 1px solid var(--border); cursor: pointer; padding: 0;
+  box-shadow: 0 1px 1px rgba(0,0,0,0.12);
+}
+.sw:hover { outline: 2px solid var(--dep-hl); outline-offset: 1px; }
+.sw-none { background: var(--bg); color: var(--muted); font-size: 12px; line-height: 18px; text-align: center; }
+.grow-row { display: flex; align-items: center; gap: 6px; margin-bottom: 5px; }
+.grow-row .g-date { flex: 1 1 auto; }
+.grow-row .g-to { width: 7em; }
+.grow-row .g-arrow { color: var(--muted); }
+.grow-row .g-del {
+  border: 1px solid var(--border); background: var(--surface); color: var(--muted); cursor: pointer;
+  border-radius: 3px; width: 22px; height: 22px; line-height: 1; flex: none; font-family: var(--font-mono);
+}
+.grow-row .g-del:hover { color: var(--danger); border-color: var(--danger); }
+.modal-del-row { margin-top: 14px; }
+.modal-del {
+  font-family: var(--font-mono); font-size: 12px; cursor: pointer;
+  border: 1px solid var(--danger); color: var(--danger); background: transparent; border-radius: 3px; padding: 5px 12px;
+}
+.modal-del:hover { background: var(--danger); color: var(--bg); }
+
 /* ── History / plans toolbar ───────────────────────────────────── */
 #hist-tools { display: inline-flex; gap: 4px; }
 .bar-right { display: inline-flex; align-items: center; gap: 6px; }

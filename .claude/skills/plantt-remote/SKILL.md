@@ -94,8 +94,10 @@ headers that let the page reach loopback (verified on Chrome 148).
   "clusters":  [ { "label": "string", "date": "YYYY-MM-DD", "color": "#hex" } ],
   "capacity":  [ {
       "name": "string", "chip": "H100|H200|B200|A100|v4p|v5e|v5p|v6e", "chips": 0,
+      "flops": 0, // optional FLOP/s per chip; overrides the chip-type default
       "from": "YYYY-MM-DD", "to": "YYYY-MM-DD?", "color": "#hex",
-      "grows": [ { "date": "YYYY-MM-DD", "to": 0 } ], "note": "string?"
+      "grows": [ { "date": "YYYY-MM-DD", "to": 0 } ], // each event sets the new TOTAL chip count
+      "note": "string?"
   } ],
   "workstreams": [ {
       "name": "string", "note": "string?",

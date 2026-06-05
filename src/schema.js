@@ -62,8 +62,10 @@ export const SCHEMA = {
       "Purely visual lines; NOT the compute pools (those are `capacity`).",
     capacity:
       "array? of compute pools (utilization lanes under the chart): { name:string (referenced " +
-      "by a task's `cluster`), chip:<one of chips>, chips:number, from:'YYYY-MM-DD', " +
-      "to?:'YYYY-MM-DD' (retired), color:'#hex', grows?:[{date:'YYYY-MM-DD', to:number}], note?:string }.",
+      "by a task's `cluster`), chip:<one of chips>, chips:number (initial count at `from`), " +
+      "flops?:number (FLOP/s per chip; overrides the chip-type default), from:'YYYY-MM-DD', " +
+      "to?:'YYYY-MM-DD' (retired/removed), color:'#hex', " +
+      "grows?:[{date:'YYYY-MM-DD', to:number}] (each event sets the new TOTAL chip count — add or remove), note?:string }.",
     workstreams:
       "array (required) of { name:string, note?:string, tasks:[Task], milestones?:[Milestone] }.",
   },
