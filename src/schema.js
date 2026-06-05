@@ -117,6 +117,7 @@ export const OPS = {
   updateCapacity: "{ name, set:{...} } — patch (NOT name; use renameCapacity)",
   renameCapacity: "{ name, to } — rename a pool; repoints task.cluster refs",
   removeCapacity: "{ name } — remove a pool; drops now-dangling task.cluster refs",
+  moveCapacity: "{ name, toIndex } — reorder a pool (lane order)",
   addCluster: "{ cluster:{label,date,color} } — add a date marker",
   updateCluster: "{ label, set:{...} }",
   removeCluster: "{ label }",

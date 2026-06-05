@@ -162,12 +162,41 @@ body.compact-mode #chart-container { background: var(--surface); padding: 18px; 
   border-radius: 3px; width: 22px; height: 22px; line-height: 1; flex: none; font-family: var(--font-mono);
 }
 .grow-row .g-del:hover { color: var(--danger); border-color: var(--danger); }
-.modal-del-row { margin-top: 14px; }
+.modal-del-row { margin-top: 14px; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .modal-del {
   font-family: var(--font-mono); font-size: 12px; cursor: pointer;
   border: 1px solid var(--danger); color: var(--danger); background: transparent; border-radius: 3px; padding: 5px 12px;
 }
 .modal-del:hover { background: var(--danger); color: var(--bg); }
+.c-readout { font-family: var(--font-mono); font-size: 11px; color: var(--heading); margin-top: 6px; }
+.c-readout .c-tl { color: var(--muted); }
+.c-tasks-wrap { margin-top: 12px; }
+.c-tasks-head { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 5px; }
+.c-tasks { display: flex; flex-wrap: wrap; gap: 5px; }
+.c-task {
+  font-family: var(--font-mono); font-size: 11px; cursor: pointer;
+  border: 1px solid var(--border); background: var(--surface); color: var(--fg); border-radius: 3px; padding: 3px 8px;
+}
+.c-task:hover { border-color: var(--dep-hl); }
+.c-tasks-empty { font-size: 12px; color: var(--faint); }
+
+/* Lane right-click menu */
+.ctx-menu {
+  position: fixed; z-index: 500; background: var(--bg); border: 1px solid var(--border);
+  border-radius: 5px; box-shadow: 0 6px 24px rgba(0,0,0,0.22); padding: 5px;
+  font-family: var(--font-mono); min-width: 150px;
+}
+.ctx-menu .ctx-label {
+  font-size: 10.5px; color: var(--faint); padding: 3px 8px 5px; max-width: 240px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-bottom: 1px solid var(--border); margin-bottom: 4px;
+}
+.ctx-menu button {
+  display: block; width: 100%; text-align: left; font-family: inherit; font-size: 12px;
+  border: none; background: transparent; color: var(--fg); border-radius: 3px; padding: 5px 8px; cursor: pointer;
+}
+.ctx-menu button:hover:not(:disabled) { background: rgba(127,127,127,0.12); }
+.ctx-menu button[data-act="del"] { color: var(--danger); }
+.ctx-menu button:disabled { color: var(--faint); cursor: default; }
 
 /* ── History / plans toolbar ───────────────────────────────────── */
 #hist-tools { display: inline-flex; gap: 4px; }

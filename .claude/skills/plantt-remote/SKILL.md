@@ -145,6 +145,7 @@ Capacity / compute (by name; tasks reference it via `cluster`):
 - `{op:"addCapacity", capacity:{...}}` · `{op:"updateCapacity", name, set:{...}}`
 - `{op:"renameCapacity", name, to}` — **repoints task.cluster refs**
 - `{op:"removeCapacity", name}` — drops now-dangling `cluster` refs on tasks
+- `{op:"moveCapacity", name, toIndex}` — reorder a pool (lane order)
 
 Clusters / date markers (by label) and plan fields:
 - `{op:"addCluster", cluster:{label,date,color}}` · `{op:"updateCluster", label, set:{...}}` · `{op:"removeCluster", label}`

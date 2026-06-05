@@ -872,13 +872,33 @@ function renderSVG(data, layout) {
       });
       hit.addEventListener("mousemove", e => capLaneHover(row.name, row.color, e.clientX));
       hit.addEventListener("mouseleave", clearCapHover);
-      // double-click a lane → edit that cluster
+      // double-click a lane → edit that cluster; right-click → quick menu
       hit.addEventListener("dblclick", (e) => {
         e.preventDefault();
         const idx = (model.capacity || []).findIndex((c) => c.name === row.name);
         if (idx >= 0) openClusterModal(idx);
       });
+      hit.addEventListener("contextmenu", (e) => {
+        const idx = (model.capacity || []).findIndex((c) => c.name === row.name);
+        if (idx >= 0) showCapMenu(e, idx);
+      });
       svg.appendChild(hit);
+      // Draggable handles on top: retire edge + each change-event marker
+      const mcl = (model.capacity || []).find((c) => c.name === row.name);
+      const ci = mcl ? model.capacity.indexOf(mcl) : -1;
+      if (ci >= 0) {
+        const mkHandle = (x, onDown) => {
+          const h = el("circle", { cx: x, cy: row.centerY, r: 4.5, fill: row.color, stroke: BACKGROUND, "stroke-width": 1.5, cursor: "ew-resize" });
+          h.addEventListener("pointerdown", onDown);
+          h.addEventListener("contextmenu", (e) => showCapMenu(e, ci));
+          svg.appendChild(h);
+        };
+        if (row.lostX != null) mkHandle(row.lostX, (e) => beginCapDrag("retire", ci, -1, e));
+        if (Array.isArray(mcl.grows)) mcl.grows.forEach((g, gi) => {
+          const gx = layout.timeToX(parseDate(g.date));
+          if (gx >= layout.chartLeft && gx <= layout.chartRight) mkHandle(gx, (e) => beginCapDrag("event", ci, gi, e));
+        });
+      }
     }
   }
 
@@ -2022,6 +2042,8 @@ function openHelpModal() {
     row("double-click bar / \u25c6", "Edit the activity / milestone in a dialog"),
     row("double-click a capacity lane", "Edit that compute cluster"),
     row("double-click \u201cCompute capacity\u201d", "Add a new cluster"),
+    row("drag a lane handle", "Move a cluster\u2019s retire date or a change-event"),
+    row("right-click a capacity lane", "Quick menu: edit / duplicate / reorder / delete"),
     row("hover a bar or pool", "Highlight the linked capacity / activities"),
   ].join("");
   const tree = [
@@ -2687,6 +2709,96 @@ function openMilestoneModal(wsIndex, msIndex) {
   });
 }
 
+// ─── Cluster helpers / direct manipulation / context menu ─────────
+function isoLocal(d) { const p = (n) => String(n).padStart(2, "0"); return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate()); }
+function tasksForCluster(name) {
+  const out = [];
+  model.workstreams.forEach((ws, wi) => ws.tasks.forEach((t, ti) => { if (t.cluster === name) out.push({ wsIndex: wi, taskIndex: ti, name: t.name }); }));
+  return out;
+}
+function uniqueCapName(base) {
+  const names = new Set((model.capacity || []).map((c) => c.name));
+  if (!names.has(base)) return base;
+  for (let i = 2; ; i++) { const n = `${base} ${i}`; if (!names.has(n)) return n; }
+}
+function duplicateCluster(capIndex) {
+  const src = clone(model.capacity[capIndex]);
+  src.name = uniqueCapName(src.name + " copy");
+  const r = window.plantt.apply([{ op: "addCapacity", capacity: src }], `Duplicate cluster "${model.capacity[capIndex].name}"`);
+  if (!r.ok) setStatus(r.error, true);
+}
+
+// Drag a lane's retire edge or a change-event marker to move its date.
+let capDrag = null;
+function beginCapDrag(kind, capIndex, growIndex, e) {
+  if (e.button !== 0 || dragState || capDrag) return;
+  e.stopPropagation();
+  const cl = model.capacity[capIndex];
+  const origDate = kind === "retire" ? (cl.to ? parseDate(cl.to) : new Date()) : parseDate(cl.grows[growIndex].date);
+  capDrag = { kind, capIndex, growIndex, origDate, grabClientX: e.clientX, pxPerDay: screenPxPerDay(), snapshot: clone(model), active: false };
+  window.addEventListener("pointermove", onCapDragMove);
+  window.addEventListener("pointerup", onCapDragUp);
+}
+function onCapDragMove(e) {
+  if (!capDrag) return;
+  const dx = e.clientX - capDrag.grabClientX;
+  if (!capDrag.active) { if (Math.abs(dx) < 3) return; capDrag.active = true; document.body.style.cursor = "ew-resize"; document.body.style.userSelect = "none"; }
+  const target = snapDate(new Date(+capDrag.origDate + (dx / capDrag.pxPerDay) * DAY_MS), snapUnitFor(e));
+  model = clone(capDrag.snapshot);
+  const cl = model.capacity[capDrag.capIndex];
+  if (capDrag.kind === "retire") cl.to = isoLocal(target);
+  else cl.grows[capDrag.growIndex].date = isoLocal(target);
+  dragGuide = target;
+  renderFromModel();
+  showDragTip(e, target);
+}
+function onCapDragUp() {
+  window.removeEventListener("pointermove", onCapDragMove);
+  window.removeEventListener("pointerup", onCapDragUp);
+  hideDragTip(); document.body.style.cursor = ""; document.body.style.userSelect = "";
+  const cd = capDrag; capDrag = null; dragGuide = null;
+  if (cd && cd.active) {
+    const cl = model.capacity[cd.capIndex];
+    const label = cd.kind === "retire" ? `Retire "${cl.name}" → ${cl.to}` : `Move "${cl.name}" event → ${cl.grows[cd.growIndex].date}`;
+    recordChange({ source: "drag", verb: "replace", details: { label } });
+    commitModel();
+    dragJustHappened = true; setTimeout(() => { dragJustHappened = false; }, 300);
+  } else if (cd) { renderFromModel(); }
+}
+
+// Right-click a lane → quick actions.
+let capMenuEl = null;
+function closeCapMenu() { if (capMenuEl) { capMenuEl.remove(); capMenuEl = null; document.removeEventListener("pointerdown", onCapMenuOutside, true); document.removeEventListener("keydown", onCapMenuKey, true); } }
+function onCapMenuOutside(e) { if (capMenuEl && !capMenuEl.contains(e.target)) closeCapMenu(); }
+function onCapMenuKey(e) { if (e.key === "Escape") { e.preventDefault(); closeCapMenu(); } }
+function showCapMenu(e, capIndex) {
+  e.preventDefault();
+  closeCapMenu();
+  const n = model.capacity.length;
+  const item = (act, label, disabled) => `<button type="button" data-act="${act}"${disabled ? " disabled" : ""}>${esc(label)}</button>`;
+  capMenuEl = document.createElement("div");
+  capMenuEl.id = "cap-menu"; capMenuEl.className = "ctx-menu";
+  capMenuEl.innerHTML =
+    `<div class="ctx-label">${esc(model.capacity[capIndex].name)}</div>` +
+    item("edit", "Edit…") + item("dup", "Duplicate") +
+    item("up", "Move up", capIndex === 0) + item("down", "Move down", capIndex === n - 1) +
+    item("del", "Delete");
+  document.body.appendChild(capMenuEl);
+  capMenuEl.style.left = Math.min(e.clientX, window.innerWidth - capMenuEl.offsetWidth - 8) + "px";
+  capMenuEl.style.top = Math.min(e.clientY, window.innerHeight - capMenuEl.offsetHeight - 8) + "px";
+  const act = (a) => {
+    const name = model.capacity[capIndex].name;
+    closeCapMenu();
+    if (a === "edit") openClusterModal(capIndex);
+    else if (a === "dup") duplicateCluster(capIndex);
+    else if (a === "up") window.plantt.apply([{ op: "moveCapacity", name, toIndex: capIndex - 1 }], `Reorder "${name}"`);
+    else if (a === "down") window.plantt.apply([{ op: "moveCapacity", name, toIndex: capIndex + 1 }], `Reorder "${name}"`);
+    else if (a === "del") window.plantt.apply([{ op: "removeCapacity", name }], `Delete cluster "${name}"`);
+  };
+  capMenuEl.querySelectorAll("button").forEach((b) => b.addEventListener("click", () => { if (!b.disabled) act(b.getAttribute("data-act")); }));
+  setTimeout(() => { document.addEventListener("pointerdown", onCapMenuOutside, true); document.addEventListener("keydown", onCapMenuKey, true); }, 0);
+}
+
 // ─── Cluster (compute-capacity) editor ───────────────────────────
 // Double-click a lane to edit, or the "Compute capacity" header to add. Saves
 // through the same capacity ops as the skill (addCapacity / updateCapacity /
@@ -2723,7 +2835,9 @@ function openClusterModal(capIndex) {
       field("Note (at retirement)", `<input id="c-note" type="text" value="${esc(cl.note || "")}" placeholder="e.g. lost Sep 1">`) +
     `</div>` +
     field("Colour", `<div id="c-swatches" class="sw-row">${swatches}</div><input id="c-color" type="text" value="${esc(cl.color || "")}" placeholder="#hex or empty for default">`) +
-    (adding ? "" : `<div class="modal-del-row"><button type="button" id="c-delete" class="modal-del">Delete cluster</button></div>`);
+    `<div id="c-readout" class="c-readout"></div>` +
+    (adding ? "" : `<div class="c-tasks-wrap"><div class="c-tasks-head">Activities using this cluster</div><div id="c-tasks" class="c-tasks"></div></div>`) +
+    (adding ? "" : `<div class="modal-del-row"><button type="button" id="c-dup" class="bar-btn">Duplicate</button><button type="button" id="c-delete" class="modal-del">Delete cluster</button></div>`);
 
   openModalShell(adding ? "Add cluster" : "Edit cluster", body, save);
 
@@ -2734,11 +2848,41 @@ function openClusterModal(capIndex) {
     row.innerHTML = `<input type="date" class="g-date" value="${esc(date)}"><span class="g-arrow">→</span>` +
       `<input type="number" class="g-to" min="0" placeholder="total chips" value="${to === "" ? "" : to}">` +
       `<button type="button" class="g-del" title="Remove event">×</button>`;
-    row.querySelector(".g-del").addEventListener("click", () => row.remove());
+    row.querySelector(".g-del").addEventListener("click", () => { row.remove(); recompute(); });
     growsHost.appendChild(row);
   }
   if (Array.isArray(cl.grows)) cl.grows.forEach((g) => addGrowRow(g.date, g.to));
-  modalEl.querySelector("#c-add-grow").addEventListener("click", () => addGrowRow());
+  modalEl.querySelector("#c-add-grow").addEventListener("click", () => { addGrowRow(); recompute(); });
+
+  // Live readout: peak chips / PFLOP/s + a compact chip-count timeline.
+  function recompute() {
+    const g = (id) => modalEl.querySelector("#" + id);
+    const chips0 = Math.max(0, parseInt(g("c-chips").value, 10) || 0);
+    const pfv = parseFloat(g("c-flops").value) || 0;
+    const grows = [...growsHost.querySelectorAll(".grow-row")]
+      .map((r) => ({ date: r.querySelector(".g-date").value, to: parseInt(r.querySelector(".g-to").value, 10) }))
+      .filter((x) => x.date && Number.isFinite(x.to)).sort((a, b) => (a.date < b.date ? -1 : 1));
+    const peakChips = Math.max(chips0, ...grows.map((x) => x.to), 0);
+    const tl = [];
+    if (g("c-from").value) tl.push(`${g("c-from").value}: ${chips0}`);
+    grows.forEach((x) => tl.push(`${x.date}: ${x.to}`));
+    if (g("c-to").value) tl.push(`${g("c-to").value}: 0`);
+    g("c-readout").innerHTML = `<b>Peak ${(peakChips * pfv).toFixed(2)} PFLOP/s</b> · ${peakChips} chips` +
+      (tl.length ? ` · <span class="c-tl">${esc(tl.join("  →  "))}</span>` : "");
+  }
+  modalEl.addEventListener("input", recompute);
+  recompute();
+
+  if (!adding) {
+    // Duplicate this cluster
+    modalEl.querySelector("#c-dup").addEventListener("click", () => { closeModal(); duplicateCluster(capIndex); });
+    // Activities that draw on this cluster → click to jump to that task's editor
+    const host = modalEl.querySelector("#c-tasks");
+    const ts = tasksForCluster(model.capacity[capIndex].name);
+    host.innerHTML = ts.length ? ts.map((t, i) => `<button type="button" class="c-task" data-i="${i}">${esc(t.name)}</button>`).join("")
+      : `<span class="c-tasks-empty">No activities use this cluster.</span>`;
+    host.querySelectorAll(".c-task").forEach((b, i) => b.addEventListener("click", () => { const t = ts[i]; closeModal(); openTaskModal(t.wsIndex, t.taskIndex); }));
+  }
 
   modalEl.querySelector("#c-chip").addEventListener("change", (e) => {
     const def = FLOPS_PER_CHIP[e.target.value.trim()];
@@ -3208,6 +3352,11 @@ function _applyOp(m, op) {
     case "removeCapacity": {
       const i = _capIndex(m, op.name); const cname = m.capacity[i].name; m.capacity.splice(i, 1);
       for (const it of _allItems(m)) if (it.cluster === cname) delete it.cluster; break; // drop now-dangling refs
+    }
+    case "moveCapacity": {
+      const i = _capIndex(m, op.name); const [c] = m.capacity.splice(i, 1);
+      const to = Math.max(0, Math.min(m.capacity.length, op.toIndex | 0));
+      m.capacity.splice(to, 0, c); break;
     }
     // — clusters (vertical date markers) — addressed by label —
     case "addCluster": {
