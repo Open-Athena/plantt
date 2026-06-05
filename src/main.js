@@ -1,4 +1,5 @@
 import { compressToEncodedURIComponent, decompressFromEncodedURIComponent } from "lz-string";
+import { validate, SCHEMA, OPS, EXAMPLE } from "./schema.js";
 
 (function () {
 "use strict";
@@ -100,38 +101,8 @@ const MUTED_TEXT = "#888";
 const DEP_COLOR = "#97a0ac"; // dependency arrows (muted slate; red when a dep is violated)
 
 // ─── Span Resolution ────────────────────────────────────────────
-function validate(data) {
-  if (!data || typeof data !== "object") throw new Error("Root must be an object");
-  if (!Array.isArray(data.workstreams)) throw new Error("'workstreams' must be an array");
-  // Names must be unique across BOTH activities and milestones, since dependencies
-  // reference items by name.
-  const allNames = new Set();
-  const dup = (n) => { throw new Error(`Duplicate name: '${n}' — names must be unique across activities and milestones`); };
-  for (const ws of data.workstreams) {
-    if (!ws.name) throw new Error("Every workstream needs a 'name'");
-    if (!Array.isArray(ws.tasks)) throw new Error(`Workstream '${ws.name}': 'tasks' must be an array`);
-    for (const t of ws.tasks) {
-      if (!t.name) throw new Error(`A task in '${ws.name}' is missing a 'name'`);
-      if (allNames.has(t.name)) dup(t.name);
-      allNames.add(t.name);
-    }
-    if (ws.milestones) for (const m of ws.milestones) {
-      if (!m.name) throw new Error(`A milestone in '${ws.name}' is missing a 'name'`);
-      if (allNames.has(m.name)) dup(m.name);
-      allNames.add(m.name);
-    }
-  }
-  // deps must be arrays of known names.
-  const checkDeps = (item) => {
-    if (item.deps == null) return;
-    if (!Array.isArray(item.deps)) throw new Error(`'${item.name}': 'deps' must be an array of names`);
-    for (const d of item.deps) if (!allNames.has(d)) throw new Error(`'${item.name}' depends on unknown item: '${d}'`);
-  };
-  for (const ws of data.workstreams) {
-    for (const t of ws.tasks) checkDeps(t);
-    if (ws.milestones) for (const m of ws.milestones) checkDeps(m);
-  }
-}
+// validate() now lives in ./schema.js (imported above) so the runtime contract,
+// describe()/`/schema`, and the test all share one source of truth.
 
 function parseDate(s) {
   const d = new Date(s + "T00:00:00");
@@ -3027,6 +2998,11 @@ function _summarizeOps(ops) {
 
 window.plantt = {
   version: 2,
+  // Self-describing contract (model shape, DSL semantics, op vocabulary, a valid
+  // example). Served by the relay at GET /schema so a remote LLM needs no repo.
+  describe() {
+    return { version: 2, schema: SCHEMA, ops: OPS, example: EXAMPLE };
+  },
   // ── reads ──
   getState() {
     return { uuid: currentPlan ? currentPlan.uuid : null, name: currentPlan ? currentPlan.name : null, model: clone(model) };
@@ -3093,6 +3069,7 @@ window.plantt = {
   function run(cmd) {
     const P = window.plantt;
     switch (cmd.type) {
+      case "describe":      return { ok: true, data: P.describe() };
       case "getState":      return { ok: true, data: P.getState() };
       case "outline":       return { ok: true, data: P.outline() };
       case "get":           return { ok: true, data: P.get(cmd.name) };

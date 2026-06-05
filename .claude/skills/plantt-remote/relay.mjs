@@ -107,6 +107,10 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, { connected: Date.now() - lastSeen < 30_000, lastSeen, hasState: !!lastState });
     }
     // reads -> return the page's result `data`
+    if (path === "/schema" && req.method === "GET") {
+      const r = await enqueue({ type: "describe" });
+      return send(res, 200, { ok: r.ok, schema: r.data });
+    }
     if (path === "/state" && req.method === "GET") {
       const r = await enqueue({ type: "getState" });
       return send(res, 200, { ok: r.ok, state: r.data });
