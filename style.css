@@ -208,8 +208,9 @@ body.compact-mode #chart-container { background: var(--surface); padding: 18px; 
 .help-note { font-size: 11px; color: var(--faint); margin-top: 4px; padding-top: 8px; border-top: 1px solid var(--border); }
 
 /* ── Workstreams show/hide list ────────────────────────────────── */
-#ws-list { display: flex; flex-direction: column; gap: 2px; max-height: 56vh; overflow: auto; }
+#ws-list { display: flex; flex-direction: column; gap: 2px; max-height: 48vh; overflow: auto; }
 .ws-empty { color: var(--faint); font-size: 13px; padding: 8px; }
+.sec-head { font-family: var(--font-mono); font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin-bottom: 5px; }
 .ws-row {
   display: flex; align-items: center; gap: 9px; padding: 6px 9px; border-radius: 4px;
   cursor: pointer; font-size: 14px; color: var(--fg); user-select: none;
@@ -335,7 +336,7 @@ body.compact-mode #chart-container { background: var(--surface); padding: 18px; 
 .tp-section { margin-bottom: 12px; }
 .tp-sec-label { font-family: var(--font-mono); font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin-bottom: 7px; }
 .tp-check { display: flex; align-items: center; gap: 6px; font-family: var(--font-mono); font-size: 12px; color: var(--heading); cursor: pointer; user-select: none; margin: 6px 0; }
-#theme-popover #deps-btn { width: 100%; margin: 0 0 8px; justify-content: flex-start; }
+#theme-popover .bar-btn { width: 100%; margin: 0 0 8px; justify-content: flex-start; }
 .tp-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
 .tp-actions button, .tp-file {
   font-family: var(--font-mono); font-size: 11px; cursor: pointer;

@@ -564,7 +564,8 @@ function renderSVG(data, layout) {
 
   // Cluster drop markers — labels only (no full-height line); the month grid
   // provides the only vertical structure. Each drop reads as a colored ↓ label.
-  if (Array.isArray(data.clusters)) {
+  // Hidden with the compute-capacity section (they're compute annotations).
+  if (showCapacity && Array.isArray(data.clusters)) {
     for (const c of data.clusters) {
       const cd = parseDate(c.date);
       if (cd < layout.minDate || cd > layout.maxDate) continue;
@@ -1998,8 +1999,7 @@ function openHelpModal() {
     row(k("Ctrl") + k("Y"), "History tree"),
     row(k("Ctrl") + k("O"), "Plans"),
     row(k("Ctrl") + k("T"), "Appearance (themes + view toggles)"),
-    row(k("/"), "Show / hide workstreams (↑↓ or j/k, Enter to toggle)"),
-    row(k("c"), "Show / hide the compute-capacity section"),
+    row(k("/"), "Show / hide sections — workstreams + the compute-capacity section"),
     row(k("d"), "Cycle dependency lines: all → red only → off (hover reveals a chain)"),
     row(k("Esc"), "Close any dialog / menu"),
   ].join("");
@@ -2027,7 +2027,7 @@ function openHelpModal() {
          ${section("Keyboard", kb)}
          ${section("Direct manipulation", drag)}
          ${section("History tree", tree)}
-         <div class="help-note">View toggles (today line, compact, workstreams, capacity) are saved per&#8209;plan, not shared in links.</div>
+         <div class="help-note">The Appearance menu (${k("Ctrl") + k("T")}) holds the theme picker plus the view toggles. <b>Today line</b> and <b>Compact</b> have no keyboard shortcut. View toggles are saved per&#8209;plan, not shared in links.</div>
        </div>
        <div class="modal-actions"><button type="button" data-act="done">Done</button></div>
      </div>`;
@@ -2091,13 +2091,35 @@ function openWorkstreamsModal() {
   wsModalEl = document.createElement("div");
   wsModalEl.id = "modal-overlay";
   wsModalEl.innerHTML =
-    `<div id="modal" role="dialog" aria-modal="true" aria-label="Workstreams" style="width:460px">
-       <div class="modal-title">Workstreams <span style="font-size:12px;color:#999">/</span></div>
-       <div class="viz-hint" style="margin:-6px 0 10px">↑↓ or j/k to move · Enter/Space to show/hide · Esc to close</div>
-       <div class="modal-body"><div id="ws-list"></div></div>
+    `<div id="modal" role="dialog" aria-modal="true" aria-label="Show / hide sections" style="width:460px">
+       <div class="modal-title">Show / hide sections <span style="font-size:12px;color:#999">/</span></div>
+       <div class="modal-body">
+         <div class="sec-head">Sections</div>
+         <div id="cap-row" class="ws-row" title="Show / hide the compute-capacity lanes and cluster labels">
+           <span class="ws-check"></span>
+           <span class="ws-name">Compute capacity</span>
+           <span class="ws-count">lanes + cluster labels</span>
+         </div>
+         <div class="sec-head" style="margin-top:12px">Workstreams</div>
+         <div class="viz-hint" style="margin:-2px 0 8px">↑↓ or j/k to move · Enter/Space to show/hide · Esc to close</div>
+         <div id="ws-list"></div>
+       </div>
        <div class="modal-actions"><button type="button" data-act="done">Done</button></div>
      </div>`;
   document.body.appendChild(wsModalEl);
+  // Compute-capacity section toggle (mouse-click; workstream list keeps the keyboard nav).
+  const capRow = wsModalEl.querySelector("#cap-row");
+  const paintCap = () => {
+    capRow.classList.toggle("off", !showCapacity);
+    capRow.querySelector(".ws-check").textContent = showCapacity ? "☑" : "☐";
+  };
+  paintCap();
+  capRow.addEventListener("click", () => {
+    showCapacity = !showCapacity;
+    if (lastValidData) render(lastValidData); // also hides the cluster labels (see render)
+    schedulePersist();
+    paintCap();
+  });
   renderWsList();
   document.addEventListener("keydown", wsKeydown, true);
   wsModalEl.addEventListener("pointerdown", (e) => { if (e.target === wsModalEl) closeWsModal(); });
@@ -2845,15 +2867,7 @@ document.addEventListener("keydown", function (e) {
     if (document.getElementById("modal-overlay") && !wsModalEl) return;
     e.preventDefault(); openWorkstreamsModal(); return;
   }
-  // c → toggle the compute-capacity section
-  if ((e.key === "c" || e.key === "C") && plainKey && !typing && !document.getElementById("modal-overlay")) {
-    e.preventDefault();
-    showCapacity = !showCapacity;
-    if (lastValidData) render(lastValidData);
-    schedulePersist();
-    setStatus(showCapacity ? "Capacity shown" : "Capacity hidden", false);
-    return;
-  }
+  // (compute-capacity now toggles inside the "show / hide sections" menu under /)
   // d → toggle the dependency arrows overlay
   if ((e.key === "d" || e.key === "D") && plainKey && !typing && !document.getElementById("modal-overlay")) {
     e.preventDefault();
@@ -3252,6 +3266,10 @@ window.plantt = {
     pop.hidden = !show;
     if (show) { positionPopover(); refreshThemeUI(); }
   }
+
+  // "Show/hide sections" opens the / menu (workstreams + capacity).
+  const secBtn = document.getElementById("sections-btn");
+  if (secBtn) secBtn.addEventListener("click", () => { pop.hidden = true; openWorkstreamsModal(); });
 
   selLight.addEventListener("change", () => window.plantt.themes.set("light", selLight.value));
   selDark.addEventListener("change", () => window.plantt.themes.set("dark", selDark.value));
