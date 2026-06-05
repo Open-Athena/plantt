@@ -3224,18 +3224,33 @@ window.plantt = {
     if (r.ok) { importText.value = ""; refreshThemeUI(); }
   }
 
+  // Anchor the popover to the button, opening upward (the editor bar sits at the bottom).
+  function positionPopover() {
+    const r = btn.getBoundingClientRect();
+    if (!r.width || !r.height) { // editor bar closed → button hidden; fall back to bottom-right
+      pop.style.left = "auto"; pop.style.top = "auto"; pop.style.right = "12px"; pop.style.bottom = "60px";
+      return;
+    }
+    const w = pop.offsetWidth || 282;
+    pop.style.left = Math.max(8, Math.min(window.innerWidth - w - 8, r.right - w)) + "px";
+    pop.style.right = "auto";
+    pop.style.top = "auto";
+    pop.style.bottom = Math.max(8, window.innerHeight - r.top + 6) + "px";
+  }
+  function toggle(force) {
+    const show = force != null ? force : pop.hidden;
+    pop.hidden = !show;
+    if (show) { positionPopover(); refreshThemeUI(); }
+  }
+
   selLight.addEventListener("change", () => window.plantt.themes.set("light", selLight.value));
   selDark.addEventListener("change", () => window.plantt.themes.set("dark", selDark.value));
-  btn.addEventListener("click", (e) => { e.stopPropagation(); pop.hidden = !pop.hidden; if (!pop.hidden) refreshThemeUI(); });
-  document.addEventListener("click", (e) => { if (!pop.hidden && !pop.contains(e.target) && e.target !== btn) pop.hidden = true; });
+  btn.addEventListener("click", (e) => { e.stopPropagation(); toggle(); });
+  document.addEventListener("click", (e) => { if (!pop.hidden && !pop.contains(e.target) && !btn.contains(e.target)) pop.hidden = true; });
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && !pop.hidden) { pop.hidden = true; return; }
     // Ctrl+T toggles the theme picker (Cmd+T stays the browser's new-tab shortcut).
-    if (e.ctrlKey && !e.metaKey && !e.altKey && (e.key === "t" || e.key === "T")) {
-      e.preventDefault();
-      pop.hidden = !pop.hidden;
-      if (!pop.hidden) refreshThemeUI();
-    }
+    if (e.ctrlKey && !e.metaKey && !e.altKey && (e.key === "t" || e.key === "T")) { e.preventDefault(); toggle(); }
   });
   document.getElementById("theme-import-btn").addEventListener("click", () => { importArea.hidden = !importArea.hidden; importMsg.textContent = ""; });
   document.getElementById("theme-export-btn").addEventListener("click", () => {
