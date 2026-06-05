@@ -1,22 +1,25 @@
-# plantt
+# plantt - a beautiful planning Gantt backbone for large AI projects, LLM-driveable and front-end only
 
-A small, single-page Gantt / planning tool for compute-and-training-style roadmaps:
-workstreams of tasks with dependencies, milestones, and compute-capacity utilization
-lanes rendered underneath. Tufte-flavored, no backend — the whole plan lives in a JSON
-document you can edit inline, share via URL, and undo/redo through a history tree.
+Making sure that compute capacity is appropriately used and that ambitious AI projects aren't blocked by preventable delays isn't easy, and planning tools are woefully hard to manipulate, read, and keep up to date (and ugly). Plantt addresses all of these with a lightweight LLM-driveable (via a skill) Gantt chart generator and editor. Easily share plans with collaborators, who can make their own changes and share them back with just a URL. Front-end only, to make both privacy and sharing natural.
 
 **Live:** http://openathena.ai/plantt/
 
 ![plantt — example project plan](docs/screenshot.png)
 
-## Features
 
-- Direct-manipulation editing — drag to move/resize, snap, wire dependencies, edit via modal.
-- A JSON editor (CodeMirror) as the source of truth, with live validation.
-- Compute-capacity lanes: per-cluster utilization, FLOPs-scaled lane heights, over-subscription.
-- Dependency arrows with a violations-only / all / off cycle.
-- Undo/redo **history tree** (branches preserved), named plans, and shareable `#`-URLs.
-- Capacity, today-line, compact (print) and workstream-visibility view controls.
+## Features meant to make coordinating large model development plans easy and automatable
+
+### Lightweight, shareable, agent-driveable
+- Agent-remote controllable via a local LLM relay, so larger text plans can be automatically translated into JSON plans, and edits can be made easily.
+- Direct-manipulation in-UI editing — drag to move/resize, snap, wire dependencies, double-click to edit via modal.
+- Embedded JSON editor as the source of truth, with live validation.
+- Plans shareable via compressed URLs.
+- Undo/redo history tree (branches preserved), named plans.
+
+### Model planning-focused
+- Compute-capacity lanes: per-cluster utilization, FLOPs-scaled lane heights, over-subscription. Activities can rely on clusters, and overutilization is flagged.
+- Dependency connection with a violations highlighted.
+
 
 ## Develop
 
@@ -26,7 +29,8 @@ npm run dev      # http://localhost:5173
 npm run build    # → dist/  (deployed to GitHub Pages by .github/workflows/deploy.yml)
 ```
 
-The app is plain ES modules bundled by Vite; `src/main.js` is the whole app.
+The app is plain ES modules bundled by Vite for hot reload; `src/main.js` is the whole app.
+
 
 ## Remote control (optional)
 
