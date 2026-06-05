@@ -5,7 +5,7 @@ workstreams of tasks with dependencies, milestones, and compute-capacity utiliza
 lanes rendered underneath. Tufte-flavored, no backend — the whole plan lives in a JSON
 document you can edit inline, share via URL, and undo/redo through a history tree.
 
-**Live:** https://open-athena.github.io/plantt/
+**Live:** http://openathena.ai/plantt/
 
 ## Features
 
