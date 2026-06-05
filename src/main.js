@@ -592,10 +592,11 @@ function renderSVG(data, layout) {
       let lx = cx, anchor = "start";
       if (cx + w > layout.svgWidth - 3) { lx = layout.svgWidth - 3; anchor = "end"; }
       const t = el("text", {
-        x: lx, y: bandY, cursor: "pointer",
+        x: lx, y: bandY, cursor: "ew-resize",
         "font-family": '"ET Book", Palatino, Georgia, serif',
         "font-size": "10", fill: col, "text-anchor": anchor
       }, labelStr);
+      t.addEventListener("pointerdown", (e) => beginAnnDrag(ai, e)); // drag L/R to change the date
       t.addEventListener("dblclick", (e) => { e.preventDefault(); openAnnotationModal(ai); });
       svg.appendChild(t);
     });
@@ -2071,6 +2072,7 @@ function openHelpModal() {
     row("drag a lane handle", "Move a cluster\u2019s retire date or a change-event"),
     row("right-click a capacity lane", "Quick menu: edit / duplicate / reorder / delete"),
     row("double-click a workstream name", "Add an annotation to that band"),
+    row("drag an annotation", "Move its date (⌥ weeks · ⌘ months · default days)"),
     row("double-click an annotation", "Edit / delete that annotation"),
     row("hover a bar or pool", "Highlight the linked capacity / activities"),
   ].join("");
@@ -2767,15 +2769,27 @@ function beginCapDrag(kind, capIndex, growIndex, e) {
   window.addEventListener("pointermove", onCapDragMove);
   window.addEventListener("pointerup", onCapDragUp);
 }
+// Drag an annotation left/right to change its date (same snap modifiers as activities).
+function beginAnnDrag(annIndex, e) {
+  if (e.button !== 0 || dragState || capDrag) return;
+  e.stopPropagation();
+  capDrag = { kind: "annotation", annIndex, origDate: parseDate(model.annotations[annIndex].date), grabClientX: e.clientX, pxPerDay: screenPxPerDay(), snapshot: clone(model), active: false };
+  window.addEventListener("pointermove", onCapDragMove);
+  window.addEventListener("pointerup", onCapDragUp);
+}
 function onCapDragMove(e) {
   if (!capDrag) return;
   const dx = e.clientX - capDrag.grabClientX;
   if (!capDrag.active) { if (Math.abs(dx) < 3) return; capDrag.active = true; document.body.style.cursor = "ew-resize"; document.body.style.userSelect = "none"; }
   const target = snapDate(new Date(+capDrag.origDate + (dx / capDrag.pxPerDay) * DAY_MS), snapUnitFor(e));
   model = clone(capDrag.snapshot);
-  const cl = model.capacity[capDrag.capIndex];
-  if (capDrag.kind === "retire") cl.to = isoLocal(target);
-  else cl.grows[capDrag.growIndex].date = isoLocal(target);
+  if (capDrag.kind === "annotation") {
+    model.annotations[capDrag.annIndex].date = isoLocal(target);
+  } else {
+    const cl = model.capacity[capDrag.capIndex];
+    if (capDrag.kind === "retire") cl.to = isoLocal(target);
+    else cl.grows[capDrag.growIndex].date = isoLocal(target);
+  }
   dragGuide = target;
   renderFromModel();
   showDragTip(e, target);
@@ -2786,8 +2800,9 @@ function onCapDragUp() {
   hideDragTip(); document.body.style.cursor = ""; document.body.style.userSelect = "";
   const cd = capDrag; capDrag = null; dragGuide = null;
   if (cd && cd.active) {
-    const cl = model.capacity[cd.capIndex];
-    const label = cd.kind === "retire" ? `Retire "${cl.name}" → ${cl.to}` : `Move "${cl.name}" event → ${cl.grows[cd.growIndex].date}`;
+    let label;
+    if (cd.kind === "annotation") { const a = model.annotations[cd.annIndex]; label = `Move "${a.text}" → ${a.date}`; }
+    else { const cl = model.capacity[cd.capIndex]; label = cd.kind === "retire" ? `Retire "${cl.name}" → ${cl.to}` : `Move "${cl.name}" event → ${cl.grows[cd.growIndex].date}`; }
     recordChange({ source: "drag", verb: "replace", details: { label } });
     commitModel();
     dragJustHappened = true; setTimeout(() => { dragJustHappened = false; }, 300);
