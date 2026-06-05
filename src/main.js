@@ -1164,7 +1164,16 @@ function depChainSet(name) {
   while (q.length) { const x = q.pop(); for (const n of (adj[x] || [])) if (!seen.has(n)) { seen.add(n); q.push(n); } }
   return seen;
 }
+// Hover clears are DEFERRED one tick: moving between an activity's own sub-elements
+// (bar body ↔ resize-edge handles) fires leave-then-enter, and the enter cancels the
+// pending clear — so the highlight never blinks off in between.
+let _depHoverTimer = null;
 function setDepHover(name) {
+  clearTimeout(_depHoverTimer); _depHoverTimer = null;
+  if (name == null) { _depHoverTimer = setTimeout(() => applyDepHover(null), 0); return; }
+  applyDepHover(name);
+}
+function applyDepHover(name) {
   depHover = name;
   depHoverChain = (name && lastValidData) ? depChainSet(name) : null; // computed in every mode (off → reveal)
   if (lastSvg) lastSvg.querySelectorAll(".dep-edge").forEach((e) => {
@@ -2330,7 +2339,13 @@ let dragGuide = null;     // Date at the snapped drag edge → full-height align
 let crosshair = { visible: false, userX: 0 }; // mouse-following vertical guide + date
 let chLine = null, chBg = null, chText = null; // live crosshair elements in the current SVG
 let clusterHL = null; // { name, x1, x2 } — lane + time window of the hovered activity
+let _clusterHLTimer = null;
 function setClusterHL(name, x1, x2) {
+  clearTimeout(_clusterHLTimer); _clusterHLTimer = null;
+  if (name == null) { _clusterHLTimer = setTimeout(() => applyClusterHL(null), 0); return; } // deferred clear (see setDepHover)
+  applyClusterHL(name, x1, x2);
+}
+function applyClusterHL(name, x1, x2) {
   const next = name ? { name, x1, x2 } : null;
   const same = (!next && !clusterHL) ||
     (next && clusterHL && clusterHL.name === next.name && clusterHL.x1 === next.x1 && clusterHL.x2 === next.x2);
@@ -2544,20 +2559,22 @@ function addTaskHandles(svg, t) {
   const yTop = t.y - hitH / 2;
   const x1 = t.x1, x2 = Math.max(t.x2, t.x1 + 2), w = x2 - x1;
   const id = { name: t.name, wsIndex: t.wsIndex, taskIndex: t.taskIndex, link: t.link, tooltip: t.tooltip };
+  // Same hover on every sub-element of the activity (body + resize edges), so moving
+  // across them keeps one stable highlight instead of toggling at the seams.
+  const hoverOn = () => { if (t.cluster) setClusterHL(t.cluster, t.x1, t.x2); setDepHover(t.name); };
+  const hoverOff = () => { if (t.cluster) setClusterHL(null); setDepHover(null); };
   const body = el("rect", { x: x1, y: yTop, width: w, height: hitH, fill: "transparent", cursor: "grab" });
   attachItemEvents(body, t.tooltip, e => beginDrag("task-body", id, e), () => openTaskModal(t.wsIndex, t.taskIndex));
-  if (t.cluster) {
-    body.addEventListener("mouseenter", () => setClusterHL(t.cluster, t.x1, t.x2)); // highlight the pool/time it draws from
-    body.addEventListener("mouseleave", () => setClusterHL(null));
-  }
-  body.addEventListener("mouseenter", () => setDepHover(t.name));
-  body.addEventListener("mouseleave", () => setDepHover(null));
+  body.addEventListener("mouseenter", hoverOn);
+  body.addEventListener("mouseleave", hoverOff);
   svg.appendChild(body);
   if (w >= 14) {
     for (const [side, hx] of [["task-left", x1 - 3], ["task-right", x2 - 4]]) {
       const edge = el("rect", { x: hx, y: yTop, width: 7, height: hitH, fill: "transparent", cursor: "ew-resize" });
       edge.addEventListener("pointerdown", e => beginDrag(side, id, e));
       edge.addEventListener("dblclick", e => { e.preventDefault(); openTaskModal(t.wsIndex, t.taskIndex); });
+      edge.addEventListener("mouseenter", hoverOn);
+      edge.addEventListener("mouseleave", hoverOff);
       svg.appendChild(edge);
     }
   }
