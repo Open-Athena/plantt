@@ -1992,16 +1992,16 @@ function openHelpModal() {
   const k = (s) => `<kbd>${s}</kbd>`;
   const row = (keys, desc) => `<tr><td class="help-keys">${keys}</td><td>${esc(desc)}</td></tr>`;
   const kb = [
-    row(k("?"), "Show this help"),
-    row(k("Ctrl") + k("\\"), "Toggle the JSON editor"),
-    row(k(mod) + k("Z"), "Undo"),
-    row(k(mod) + k("\u21e7") + k("Z"), "Redo"),
-    row(k("Ctrl") + k("Y"), "History tree"),
-    row(k("Ctrl") + k("O"), "Plans"),
-    row(k("Ctrl") + k("T"), "Appearance (themes + view toggles)"),
-    row(k("/"), "Show / hide sections — workstreams + the compute-capacity section"),
-    row(k("d"), "Cycle dependency lines: all → red only → off (hover reveals a chain)"),
-    row(k("Esc"), "Close any dialog / menu"),
+    row(k("Ctrl") + k("\\"), "toggle json editor + control panel"),
+    row(k(mod) + k("Z"), "undo"),
+    row(k(mod) + k("\u21e7") + k("Z"), "redo"),
+    row(k("Ctrl") + k("Y"), "show plan history tree"),
+    row(k("Ctrl") + k("O"), "list all saved plans"),
+    row(k("Ctrl") + k("T"), "modify appearance"),
+    row(k("Ctrl") + k("⇧") + k("T"), "toggle today line"),
+    row(k("Ctrl") + k("⇧") + k("C"), "toggle compact (8.5″ page)"),
+    row(k("/"), "show / hide plan sections"),
+    row(k("d"), "cycle dependency display"),
   ].join("");
   const drag = [
     row("drag bar", "Move the activity (and everything chained to it)"),
@@ -2027,7 +2027,7 @@ function openHelpModal() {
          ${section("Keyboard", kb)}
          ${section("Direct manipulation", drag)}
          ${section("History tree", tree)}
-         <div class="help-note">The Appearance menu (${k("Ctrl") + k("T")}) holds the theme picker plus the view toggles. <b>Today line</b> and <b>Compact</b> have no keyboard shortcut. View toggles are saved per&#8209;plan, not shared in links.</div>
+         <div class="help-note">The Appearance menu (${k("Ctrl") + k("T")}) holds the theme picker plus the view toggles. View toggles are saved per&#8209;plan, not shared in links.</div>
        </div>
        <div class="modal-actions"><button type="button" data-act="done">Done</button></div>
      </div>`;
@@ -2878,6 +2878,17 @@ document.addEventListener("keydown", function (e) {
   if (e.ctrlKey && !e.metaKey && (e.key === "y" || e.key === "Y")) { e.preventDefault(); openHistoryViz(); return; }
   // Ctrl+O → plans manager
   if (e.ctrlKey && !e.metaKey && (e.key === "o" || e.key === "O")) { e.preventDefault(); openPlansModal(); return; }
+  // Ctrl+Shift+T → today line · Ctrl+Shift+C → compact (the Appearance view toggles)
+  if (e.ctrlKey && e.shiftKey && !e.metaKey && (e.key === "t" || e.key === "T")) {
+    e.preventDefault();
+    const cb = document.getElementById("toggle-today"); cb.checked = !cb.checked; cb.dispatchEvent(new Event("change"));
+    return;
+  }
+  if (e.ctrlKey && e.shiftKey && !e.metaKey && (e.key === "c" || e.key === "C")) {
+    e.preventDefault();
+    const cb = document.getElementById("toggle-compact"); cb.checked = !cb.checked; cb.dispatchEvent(new Event("change"));
+    return;
+  }
   // Cmd/Ctrl+Z undo, Cmd/Ctrl+Shift+Z redo — but let CodeMirror own undo while it has focus,
   // and don't fight an open modal/visualizer.
   if ((e.metaKey || e.ctrlKey) && (e.key === "z" || e.key === "Z")) {
@@ -3277,8 +3288,9 @@ window.plantt = {
   document.addEventListener("click", (e) => { if (!pop.hidden && !pop.contains(e.target) && !btn.contains(e.target)) pop.hidden = true; });
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && !pop.hidden) { pop.hidden = true; return; }
-    // Ctrl+T toggles the theme picker (Cmd+T stays the browser's new-tab shortcut).
-    if (e.ctrlKey && !e.metaKey && !e.altKey && (e.key === "t" || e.key === "T")) { e.preventDefault(); toggle(); }
+    // Ctrl+T toggles the theme picker (Cmd+T stays the browser's new-tab shortcut;
+    // Ctrl+Shift+T is the Today-line toggle, handled elsewhere).
+    if (e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && (e.key === "t" || e.key === "T")) { e.preventDefault(); toggle(); }
   });
   document.getElementById("theme-import-btn").addEventListener("click", () => { importArea.hidden = !importArea.hidden; importMsg.textContent = ""; });
   document.getElementById("theme-export-btn").addEventListener("click", () => {
@@ -3296,6 +3308,50 @@ window.plantt = {
     reader.readAsText(f);
   });
   refreshThemeUI();
+})();
+
+// ─── Fast custom tooltips ────────────────────────────────────────────
+// Replace the slow native `title=` tooltip (~600ms+) with a themed one that
+// appears in ~300ms. We cache + strip the title on hover so the OS one never
+// fires, and restore it on leave. The chart's own markdown tooltip is untouched.
+(function initTooltips() {
+  const SHOW_DELAY = 300;
+  const tip = document.createElement("div");
+  tip.id = "ui-tip"; tip.setAttribute("role", "tooltip");
+  document.body.appendChild(tip);
+  let timer = null, cur = null;
+
+  function place(el) {
+    tip.textContent = cur && cur.__tip;
+    const r = el.getBoundingClientRect();
+    const tw = tip.offsetWidth, th = tip.offsetHeight;
+    let left = Math.round(r.left + r.width / 2 - tw / 2);
+    left = Math.max(6, Math.min(window.innerWidth - tw - 6, left));
+    let top = Math.round(r.top - th - 8);
+    if (top < 6) top = Math.round(r.bottom + 8); // flip below if no room above
+    tip.style.left = left + "px"; tip.style.top = top + "px";
+    tip.classList.add("visible");
+  }
+  function hide() {
+    clearTimeout(timer); timer = null;
+    tip.classList.remove("visible");
+    if (cur && cur.__tipTitle != null) { cur.setAttribute("title", cur.__tipTitle); cur.__tipTitle = null; }
+    cur = null;
+  }
+  document.addEventListener("mouseover", (e) => {
+    const el = e.target.closest && e.target.closest("[title]");
+    if (!el || el === cur) return;
+    if (el.closest("#chart-container")) return; // the chart has its own markdown tooltip
+    hide();
+    cur = el;
+    cur.__tip = cur.__tipTitle = el.getAttribute("title");
+    el.removeAttribute("title"); // suppress the native tooltip
+    timer = setTimeout(() => place(el), SHOW_DELAY);
+  });
+  document.addEventListener("mouseout", (e) => {
+    if (cur && !(e.relatedTarget && cur.contains(e.relatedTarget))) hide();
+  });
+  document.addEventListener("mousedown", hide, true);
 })();
 
 (function initRemoteControl() {
