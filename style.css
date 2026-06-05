@@ -273,14 +273,38 @@ body.compact-mode #chart-container { background: var(--surface); padding: 18px; 
 .toast.in { opacity: 1; transform: translateY(0); }
 
 /* ── Theme picker (palette button + popover) ───────────────────── */
-/* Inline toolbar button in the editor bar (next to Compact). */
-#theme-btn {
-  background: none; border: none; cursor: pointer; padding: 0 6px; line-height: 1;
-  color: var(--muted); display: inline-flex; align-items: center; vertical-align: middle;
-  margin-right: 4px;
+/* ── Editor-bar controls (deps button, toggles, theme button) ──────── */
+.bar-btn {
+  font-family: var(--font-mono); font-size: 12px; color: var(--muted);
+  background: var(--surface); border: 1px solid var(--border); border-radius: 4px;
+  padding: 3px 8px; cursor: pointer; box-sizing: border-box; white-space: nowrap;
+  margin-right: 8px; box-shadow: 0 1px 2px rgba(0,0,0,0.14);
 }
-#theme-btn:hover { color: var(--heading); }
+.bar-btn:hover { color: var(--heading); border-color: var(--dep-hl); }
+.bar-btn:active { box-shadow: inset 0 1px 2px rgba(0,0,0,0.18); }
+#deps-btn { width: 126px; text-align: left; }
+#theme-btn { display: inline-flex; align-items: center; padding: 3px 7px; vertical-align: middle; }
 #theme-btn svg { display: block; }
+
+.bar-toggle {
+  font-family: var(--font-mono); font-size: 12px; color: var(--muted);
+  cursor: pointer; user-select: none; margin-right: 8px;
+  display: inline-flex; align-items: center; gap: 5px;
+}
+/* Custom checkbox so it follows the theme instead of the browser default. */
+.bar-check {
+  appearance: none; -webkit-appearance: none; margin: 0;
+  width: 14px; height: 14px; flex: none; cursor: pointer; position: relative;
+  border: 1px solid var(--border); border-radius: 3px; background: var(--bg);
+  box-shadow: 0 1px 1px rgba(0,0,0,0.12); transition: background 0.12s ease, border-color 0.12s ease;
+}
+.bar-check:hover { border-color: var(--dep-hl); }
+.bar-check:checked { background: var(--dep-hl); border-color: var(--dep-hl); }
+.bar-check:checked::after {
+  content: ""; position: absolute; left: 4px; top: 1px; width: 4px; height: 7px;
+  border: solid var(--bg); border-width: 0 2px 2px 0; transform: rotate(45deg);
+}
+.bar-check:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 /* Popover is positioned by JS (anchored to the button, opening upward). */
 #theme-popover {
   position: fixed; right: 12px; bottom: 60px; z-index: 150; width: 282px;
