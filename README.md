@@ -15,6 +15,7 @@ Making sure that compute capacity is appropriately used and that ambitious AI pr
 - Embedded JSON editor as the source of truth, with live validation.
 - Plans shareable via compressed URLs.
 - Undo/redo history tree (branches preserved), named plans.
+- Themeable (Tufte, Solarized, LaTeX, Catppuccin, Nord, Gruvbox, Dracula, Rosé Pine, Print, …), following the OS light/dark preference. Themes are local-only and importable/exportable as JSON.
 
 ### Model planning-focused
 - Compute-capacity lanes: per-cluster utilization, FLOPs-scaled lane heights, over-subscription. Activities can rely on clusters, and overutilization is flagged.
@@ -36,6 +37,6 @@ The app is plain ES modules bundled by Vite for hot reload; `src/main.js` is the
 
 Loading the app with `?agent=1` lets a local tool drive the active plan over a small
 localhost relay — see [`.claude/skills/plantt-remote`](.claude/skills/plantt-remote).
-It exposes a `window.plantt` API (`getState`, `outline`, `getDeps`, `getDependents`,
-`setModel`, and an atomic name-addressed `apply(ops)`); a normal visit (without
-`?agent=1`) exposes nothing reachable.
+It exposes a `window.plantt` API (`describe`, `getState`, `outline`, `getDeps`, `getDependents`,
+`setModel`, an atomic name-addressed `apply(ops)`, and a `themes` namespace); a normal visit
+(without `?agent=1`) exposes nothing reachable.

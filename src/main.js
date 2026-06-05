@@ -1,5 +1,6 @@
 import { compressToEncodedURIComponent, decompressFromEncodedURIComponent } from "lz-string";
 import { validate, SCHEMA, OPS, EXAMPLE } from "./schema.js";
+import { BUILTIN_THEMES, TOKENS, TOKEN_NAMES, DEFAULT_THEME_ID, validateTheme } from "./themes.js";
 
 (function () {
 "use strict";
@@ -55,11 +56,22 @@ const DEFAULT_DATA = {
   ]
 };
 
-// ─── Palette ─────────────────────────────────────────────────────
-const WORKSTREAM_COLORS = ["#b8c4cc", "#c4bab0", "#a8b8a0", "#c0b0c4", "#b0c0c4"];
-const BACKGROUND = "#fffff8";
-const TODAY_COLOR = "#c0392b";
-const DRAG_HL = "#2b6cb0"; // outline/labels for the item(s) being dragged
+// ─── Palette (theme-driven) ──────────────────────────────────────
+// Reassigned by applyThemeColors() from the active theme's tokens; the SVG render
+// reads them on every (re)render. Defaults below == the Tufte theme so first paint
+// is correct before a theme applies. Plan-DATA colors (cluster.color, capacity.color,
+// milestone.line) are NOT themed — they come from the plan JSON.
+let WORKSTREAM_COLORS = ["#b8c4cc", "#c4bab0", "#a8b8a0", "#c0b0c4", "#b0c0c4"];
+let BACKGROUND = "#fffff8";
+let TODAY_COLOR = "#c0392b";
+let DRAG_HL = "#2b6cb0";   // outline/labels for the item(s) being dragged
+let TEXT = "#111111";      // primary text / titles / milestone diamonds
+let HEADING = "#333333";   // section + workstream headings
+let LABEL = "#444444";     // task/milestone labels
+let FAINT = "#999999";     // de-emphasized italic notes
+let RULE = "#555555";      // cluster/marker reference lines
+let DANGER = "#c0392b";    // violations / capacity over-subscription
+let HIST_LINE = "#d6d2c6"; // history-tree edges
 
 // Compute-capacity scaling: lane height ∝ pool FLOPs (chips × per-chip FLOPs),
 // the largest pool capped at CAP_PX. Per-chip peak BF16 FLOP/s cached from
@@ -96,9 +108,9 @@ function capMaxChips(cl) {
 }
 function poolFlops(cl) { return capMaxChips(cl) * chipFlops(cl); }       // peak FLOP/s at full size
 function flopsAt(cl, date) { return capChipsAt(cl, date) * chipFlops(cl); }
-const GRID_COLOR = "#ccc";
-const MUTED_TEXT = "#888";
-const DEP_COLOR = "#97a0ac"; // dependency arrows (muted slate; red when a dep is violated)
+let GRID_COLOR = "#ccc";
+let MUTED_TEXT = "#888";
+let DEP_COLOR = "#97a0ac"; // dependency arrows (muted slate; red when a dep is violated)
 
 // ─── Span Resolution ────────────────────────────────────────────
 // validate() now lives in ./schema.js (imported above) so the runtime contract,
@@ -503,7 +515,7 @@ function renderSVG(data, layout) {
     svg.appendChild(el("text", {
       x: layout.chartLeft, y: layout.titleY,
       "font-family": '"ET Book", Palatino, Georgia, serif',
-      "font-size": "22", fill: "#111", "font-weight": "normal"
+      "font-size": "22", fill: TEXT, "font-weight": "normal"
     }, data.title));
   }
 
@@ -604,7 +616,7 @@ function renderSVG(data, layout) {
     svg.appendChild(el("text", {
       x: layout.chartLeft, y: ws.y + 18,
       "font-family": '"ET Book", Palatino, Georgia, serif',
-      "font-size": "14", fill: "#333", "font-weight": "bold",
+      "font-size": "14", fill: HEADING, "font-weight": "bold",
       "letter-spacing": "0.3"
     }, ws.name));
 
@@ -635,7 +647,7 @@ function renderSVG(data, layout) {
 
       const barAttrs = { x: t.x1, y: barY, width: barW, height: barH, fill: ws.color };
       if (barH >= 4) {
-        barAttrs.stroke = "#888";
+        barAttrs.stroke = MUTED_TEXT;
         barAttrs["stroke-width"] = "0.5";
         barAttrs.rx = "2";
         barAttrs.ry = "2";
@@ -679,7 +691,7 @@ function renderSVG(data, layout) {
         const txt = el("text", {
           x: anchorX, y: startY,
           "font-family": '"ET Book", Palatino, Georgia, serif',
-          "font-size": fontSize, fill: "#444", "text-anchor": "start"
+          "font-size": fontSize, fill: LABEL, "text-anchor": "start"
         });
         let widest = 0;
         for (let li = 0; li < lines.length; li++) {
@@ -700,7 +712,7 @@ function renderSVG(data, layout) {
         const txt = el("text", {
           x: anchorX, y: startY,
           "font-family": '"ET Book", Palatino, Georgia, serif',
-          "font-size": fontSize, fill: "#444", "text-anchor": "end"
+          "font-size": fontSize, fill: LABEL, "text-anchor": "end"
         });
         for (let li = 0; li < lines.length; li++) {
           const tspan = el("tspan", { x: anchorX, dy: li === 0 ? "0" : lineHeight });
@@ -716,7 +728,7 @@ function renderSVG(data, layout) {
         svg.appendChild(el("text", {
           x: clusterX, y: t.y + 3.5,
           "font-family": '"ET Book", Palatino, Georgia, serif',
-          "font-size": "10", fill: "#999", "font-style": "italic",
+          "font-size": "10", fill: FAINT, "font-style": "italic",
           "text-anchor": "start"
         }, t.cluster));
       }
@@ -755,7 +767,7 @@ function renderSVG(data, layout) {
         svg.appendChild(el("text", {
           x: m.x + 12, y: m.y + 3.5,
           "font-family": '"ET Book", Palatino, Georgia, serif',
-          "font-size": "11", fill: "#444", "font-style": "italic", "text-anchor": "start"
+          "font-size": "11", fill: LABEL, "font-style": "italic", "text-anchor": "start"
         }, m.name));
         addMilestoneHandles(svg, m, 22 + measureText(m.name, 11) + 6);
         continue;
@@ -763,7 +775,7 @@ function renderSVG(data, layout) {
 
       const diamond = `M${m.x},${m.y - size} L${m.x + size},${m.y} L${m.x},${m.y + size} L${m.x - size},${m.y} Z`;
       svg.appendChild(el("path", {
-        d: diamond, fill: "#111", stroke: "none"
+        d: diamond, fill: TEXT, stroke: "none"
       }));
       const mLabelX = m.x + size + 5;
       const mFontSize = 11;
@@ -776,7 +788,7 @@ function renderSVG(data, layout) {
       const mTxt = el("text", {
         x: mLabelX, y: mStartY,
         "font-family": '"ET Book", Palatino, Georgia, serif',
-        "font-size": mFontSize, fill: "#444", "font-style": "italic",
+        "font-size": mFontSize, fill: LABEL, "font-style": "italic",
         "text-anchor": "start"
       });
       for (let li = 0; li < mLines.length; li++) {
@@ -797,7 +809,7 @@ function renderSVG(data, layout) {
     svg.appendChild(el("text", {
       x: layout.chartLeft, y: cap.y + 18,
       "font-family": '"ET Book", Palatino, Georgia, serif',
-      "font-size": "14", fill: "#333", "font-weight": "bold", "letter-spacing": "0.3"
+      "font-size": "14", fill: HEADING, "font-weight": "bold", "letter-spacing": "0.3"
     }, "Compute capacity"));
     svg.appendChild(el("text", {
       x: layout.chartLeft, y: cap.y + 32,
@@ -819,7 +831,7 @@ function renderSVG(data, layout) {
         }));
         // Over-subscription shown in red (capped at full height)
         if (s.redH > 0) svg.appendChild(el("rect", {
-          x: s.x1, y: row.centerY - s.redH / 2, width: w, height: s.redH, fill: "#c0392b", opacity: "0.9"
+          x: s.x1, y: row.centerY - s.redH / 2, width: w, height: s.redH, fill: DANGER, opacity: "0.9"
         }));
       }
       // "Lost" end-cap + note where a cluster goes away
@@ -866,13 +878,13 @@ function renderSVG(data, layout) {
   const cx0 = Math.max(layout.chartLeft, Math.min(crosshair.userX, layout.chartRight));
   const disp = crosshair.visible ? "inline" : "none";
   chLine = el("line", {
-    x1: cx0, y1: chy1, x2: cx0, y2: chy2, stroke: "#555",
+    x1: cx0, y1: chy1, x2: cx0, y2: chy2, stroke: RULE,
     "stroke-width": "0.75", "stroke-dasharray": "2,3", opacity: "0.8", display: disp
   });
   chBg = el("rect", { x: cx0 - 34, y: layout.axisY + 18, width: 68, height: 15, fill: BACKGROUND, opacity: "0.9", display: disp });
   chText = el("text", {
     x: cx0, y: layout.axisY + 29, "text-anchor": "middle",
-    "font-family": '"SF Mono", Menlo, monospace', "font-size": "10", fill: "#333", display: disp
+    "font-family": '"SF Mono", Menlo, monospace', "font-size": "10", fill: HEADING, display: disp
   }, crosshair.visible ? fmtShort(xToTime(layout, cx0)) : "");
   svg.appendChild(chLine);
   svg.appendChild(chBg);
@@ -1043,7 +1055,7 @@ function drawDepLayer(svg, data, layout) {
     if (seen.has(key)) return; seen.add(key);
     const fromX = a.xe, fromY = a.y, toX = b.xs, toY = b.y;
     const backward = toX < fromX - 0.5;
-    const col = backward ? "#c0392b" : DEP_COLOR;
+    const col = backward ? DANGER : DEP_COLOR;
     // Route through the lowest-crossing vertical channel. When cx === fromX this is a
     // straight drop; otherwise an elbow nudged into a gap between intermediate bars.
     const cx = pickChannel(fromX, fromY, toX, toY);
@@ -1076,7 +1088,7 @@ function drawDepLayer(svg, data, layout) {
 
 // Hover an item → highlight its whole dependency chain (upstream + downstream).
 let depHover = null, depHoverChain = null;
-const DEP_HL = "#5f7488";
+let DEP_HL = "#5f7488";
 function buildDepAdj(data) {
   const adj = {};
   const link = (a, b) => { (adj[a] = adj[a] || new Set()).add(b); (adj[b] = adj[b] || new Set()).add(a); };
@@ -1891,7 +1903,7 @@ function renderViz() {
     if (n.parentId == null) continue;
     const px = X(n.parentId), py = Y(n.parentId), cx = X(id), cy = Y(id);
     const onPath = history.nodes.get(n.parentId).activeChild === id; // bold the active (linear redo) branch
-    const st = `stroke="${onPath ? "#888" : "#d6d2c6"}" stroke-width="${onPath ? 2 : 1.5}" fill="none"`;
+    const st = `stroke="${onPath ? MUTED_TEXT : HIST_LINE}" stroke-width="${onPath ? 2 : 1.5}" fill="none"`;
     // Turn out at the branch point, then descend the child's own lane. Routing the
     // corner at the PARENT row (H then V) keeps the vertical in the branch's lane
     // instead of overlapping the trunk, so the branch clearly leaves its parent.
@@ -1906,7 +1918,7 @@ function renderViz() {
     const dash = n.detached ? ' stroke-dasharray="2,2"' : "";
     nodes += `<g class="viz-node" data-id="${id}" style="cursor:pointer">` +
       `<rect x="0" y="${Y(id) - ROW / 2}" width="${W}" height="${ROW}" fill="transparent"/>` +
-      `<circle cx="${X(id)}" cy="${Y(id)}" r="${R}" fill="${st.color}" stroke="${isCur ? "#111" : "#fffff8"}" stroke-width="${isCur ? 3 : 1.5}"${dash}/>` +
+      `<circle cx="${X(id)}" cy="${Y(id)}" r="${R}" fill="${st.color}" stroke="${isCur ? TEXT : BACKGROUND}" stroke-width="${isCur ? 3 : 1.5}"${dash}/>` +
       `<text x="${labelX}" y="${Y(id) + 4}" class="viz-label" font-weight="${isCur ? "700" : "400"}">${(n.detached ? "⊘ " : "") + esc(n.summary)}</text>` +
       `</g>`;
   }
@@ -2660,11 +2672,75 @@ const cm = CodeMirror.fromTextArea(document.getElementById("editor"), {
   indentWithTabs: false
 });
 
+// ═══════════════════════════════════════════════════════════════════
+//  Theme engine — local-only, follows the OS light/dark preference
+// ═══════════════════════════════════════════════════════════════════
+// A theme is a token map (see src/themes.js). Built-ins live in code; imported
+// themes (same shape) live in localStorage. The selection binds one theme to the
+// system LIGHT slot and one to the DARK slot; we apply whichever matches the OS.
+// Nothing is ever uploaded — themes + selection live only in this browser.
+const THEME_CUSTOM_KEY = "plantt-themes-custom";
+const THEME_SELECTION_KEY = "plantt-theme-selection";
+
+function loadCustomThemes() {
+  try { const a = JSON.parse(localStorage.getItem(THEME_CUSTOM_KEY) || "[]"); return Array.isArray(a) ? a : []; }
+  catch (e) { return []; }
+}
+function saveCustomThemes(arr) { localStorage.setItem(THEME_CUSTOM_KEY, JSON.stringify(arr)); }
+// builtins first; a custom theme may override a builtin by reusing its id.
+function allThemes() {
+  const map = new Map();
+  for (const t of BUILTIN_THEMES) map.set(t.id, { ...t, builtin: true });
+  for (const t of loadCustomThemes()) map.set(t.id, { ...t, builtin: false });
+  return [...map.values()];
+}
+function themeById(id) { return allThemes().find((t) => t.id === id) || null; }
+
+function loadSelection() {
+  let s = null;
+  try { s = JSON.parse(localStorage.getItem(THEME_SELECTION_KEY) || "null"); } catch (e) { /* ignore */ }
+  if (!s || typeof s !== "object") s = {};
+  return { light: s.light || DEFAULT_THEME_ID, dark: s.dark || DEFAULT_THEME_ID };
+}
+let themeSelection = loadSelection();
+function saveSelection() { localStorage.setItem(THEME_SELECTION_KEY, JSON.stringify(themeSelection)); }
+let refreshThemeUI = () => {}; // reassigned by the picker UI once the DOM is wired
+
+const prefersDark = () => !!(window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches);
+function activeThemeId() { return prefersDark() ? themeSelection.dark : themeSelection.light; }
+
+// Push a theme's tokens to <html> (for the CSS/HTML UI) and into the JS render
+// palette (for the SVG chart). Plan-DATA colors are untouched.
+function applyThemeColors(t) {
+  const tk = t.tokens || {};
+  const root = document.documentElement.style;
+  for (const [k, v] of Object.entries(tk)) root.setProperty(k, v);
+  document.documentElement.setAttribute("data-theme", t.id || "");
+  document.documentElement.setAttribute("data-appearance", t.appearance || "");
+  BACKGROUND = tk["--bg"]; TEXT = tk["--fg"]; HEADING = tk["--heading"]; LABEL = tk["--label"];
+  FAINT = tk["--faint"]; MUTED_TEXT = tk["--muted"]; GRID_COLOR = tk["--grid"]; RULE = tk["--rule"];
+  TODAY_COLOR = tk["--today"]; DANGER = tk["--danger"]; DRAG_HL = tk["--accent"];
+  DEP_COLOR = tk["--dep"]; DEP_HL = tk["--dep-hl"]; HIST_LINE = tk["--hist-line"];
+  if (Array.isArray(t.barPalette) && t.barPalette.length) WORKSTREAM_COLORS = t.barPalette;
+}
+function applyActiveTheme(rerender = true) {
+  const t = themeById(activeThemeId()) || themeById(DEFAULT_THEME_ID) || BUILTIN_THEMES[0];
+  applyThemeColors(t);
+  if (rerender && model) { try { renderFromModel(); } catch (e) { /* invalid model mid-edit */ } if (vizOpen) renderViz(); }
+  refreshThemeUI();
+}
+// Live-update when the OS flips light/dark.
+if (window.matchMedia) {
+  try { window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => applyActiveTheme()); }
+  catch (e) { /* older Safari */ }
+}
+
 const STORAGE_KEY = "plantt-json-legacy"; // legacy key, migrated into a plan on first load
 // Open a plan: shared #hash (by uuid) > current-plan pointer > most-recent > built-in default.
 // This sets the globals: model, history, currentPlan, showTodayLine, compactMode.
 const hashState = location.hash.length > 1 ? decodeState(location.hash.slice(1)) : null;
 bootstrapPlans(hashState);
+applyActiveTheme(false); // set the palette + CSS vars before the first paint
 cm.setValue(JSON.stringify(model, null, 2)); // explicit loadModelFromText below does the first render
 
 let debounceTimer = null;
@@ -3001,7 +3077,14 @@ window.plantt = {
   // Self-describing contract (model shape, DSL semantics, op vocabulary, a valid
   // example). Served by the relay at GET /schema so a remote LLM needs no repo.
   describe() {
-    return { version: 2, schema: SCHEMA, ops: OPS, example: EXAMPLE };
+    return {
+      version: 2, schema: SCHEMA, ops: OPS, example: EXAMPLE,
+      themes: {
+        tokens: TOKENS, // [[--name, description], …] every theme must define
+        note: "Themes are local-only (localStorage), follow the OS light/dark preference, and bind " +
+          "one theme to each system slot. Manage via window.plantt.themes / the relay /theme* endpoints.",
+      },
+    };
   },
   // ── reads ──
   getState() {
@@ -3046,7 +3129,122 @@ window.plantt = {
     commitModel();
     return { ok: true, applied: ops.length };
   },
+  // ── themes (local-only; follow the OS light/dark preference) ──
+  themes: {
+    tokens() { return TOKENS; }, // [[--name, description], …] — what a theme must define
+    list() { return allThemes().map((t) => ({ id: t.id, name: t.name, appearance: t.appearance, builtin: !!t.builtin })); },
+    current() { return { light: themeSelection.light, dark: themeSelection.dark, active: activeThemeId(), appearance: prefersDark() ? "dark" : "light" }; },
+    get(id) {
+      const t = themeById(id);
+      return t ? { id: t.id, name: t.name, appearance: t.appearance, tokens: t.tokens, barPalette: t.barPalette || null, builtin: !!t.builtin } : null;
+    },
+    // Bind a theme to the system light or dark slot.
+    set(slot, id) {
+      if (slot !== "light" && slot !== "dark") return { ok: false, error: 'slot must be "light" or "dark"' };
+      if (!themeById(id)) return { ok: false, error: "unknown theme id: " + id };
+      themeSelection[slot] = id; saveSelection(); applyActiveTheme();
+      return { ok: true, current: window.plantt.themes.current() };
+    },
+    // Add custom theme(s): a theme object, a JSON string, an array, or {themes:[…]}.
+    import(input) {
+      let data = input;
+      if (typeof data === "string") { try { data = JSON.parse(data); } catch (e) { return { ok: false, error: "invalid JSON: " + e.message }; } }
+      const list = Array.isArray(data) ? data : (data && Array.isArray(data.themes) ? data.themes : [data]);
+      const custom = loadCustomThemes(); const added = [];
+      for (const one of list) {
+        const v = validateTheme(one); if (!v.ok) return { ok: false, error: (one && one.id ? one.id + ": " : "") + v.error };
+        const clean = { id: one.id, name: one.name, appearance: one.appearance || "light", tokens: one.tokens, barPalette: one.barPalette || null };
+        const i = custom.findIndex((c) => c.id === one.id);
+        if (i >= 0) custom[i] = clean; else custom.push(clean);
+        added.push(one.id);
+      }
+      saveCustomThemes(custom); applyActiveTheme();
+      return { ok: true, added };
+    },
+    export(id) {
+      const t = themeById(id); if (!t) return { ok: false, error: "unknown theme id: " + id };
+      return { ok: true, theme: { id: t.id, name: t.name, appearance: t.appearance, tokens: t.tokens, barPalette: t.barPalette || null } };
+    },
+    exportAll() { return { ok: true, themes: loadCustomThemes() }; }, // custom only — built-ins ship with the app
+    remove(id) {
+      const custom = loadCustomThemes(); const i = custom.findIndex((c) => c.id === id);
+      if (i < 0) return { ok: false, error: "no custom theme: " + id };
+      custom.splice(i, 1); saveCustomThemes(custom);
+      let changed = false;
+      for (const slot of ["light", "dark"]) if (themeSelection[slot] === id) { themeSelection[slot] = DEFAULT_THEME_ID; changed = true; }
+      if (changed) saveSelection();
+      applyActiveTheme();
+      return { ok: true };
+    },
+  },
 };
+
+// ─── Theme picker UI (palette button + popover) ──────────────────────
+(function initThemeUI() {
+  const btn = document.getElementById("theme-btn");
+  const pop = document.getElementById("theme-popover");
+  if (!btn || !pop) return;
+  const selLight = document.getElementById("theme-light");
+  const selDark = document.getElementById("theme-dark");
+  const activeLbl = document.getElementById("theme-active");
+  const importArea = document.getElementById("theme-import-area");
+  const importText = document.getElementById("theme-import-text");
+  const importFile = document.getElementById("theme-import-file");
+  const importMsg = document.getElementById("theme-import-msg");
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+  function optionsHTML(selectedId) {
+    const all = allThemes();
+    const opt = (t) => `<option value="${esc(t.id)}"${t.id === selectedId ? " selected" : ""}>${esc(t.name)}</option>`;
+    const std = all.filter((t) => t.builtin), cust = all.filter((t) => !t.builtin);
+    let h = `<optgroup label="Standard">${std.map(opt).join("")}</optgroup>`;
+    if (cust.length) h += `<optgroup label="Imported">${cust.map(opt).join("")}</optgroup>`;
+    return h;
+  }
+  // Reassign the module-level hook so applyActiveTheme() keeps the UI in sync.
+  refreshThemeUI = function () {
+    selLight.innerHTML = optionsHTML(themeSelection.light);
+    selDark.innerHTML = optionsHTML(themeSelection.dark);
+    const t = themeById(activeThemeId());
+    const mode = prefersDark() ? "dark" : "light";
+    activeLbl.textContent = "Active: " + (t ? t.name : "—") + " · " + mode + " mode" + (t && !t.builtin ? " · imported" : "");
+  };
+
+  function downloadJSON(filename, obj) {
+    const blob = new Blob([JSON.stringify(obj, null, 2)], { type: "application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob); a.download = filename; a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  }
+  function doImport(text) {
+    const r = window.plantt.themes.import(text);
+    importMsg.textContent = r.ok ? "Added: " + r.added.join(", ") : "Error: " + r.error;
+    importMsg.style.color = r.ok ? "var(--muted)" : "var(--danger)";
+    if (r.ok) { importText.value = ""; refreshThemeUI(); }
+  }
+
+  selLight.addEventListener("change", () => window.plantt.themes.set("light", selLight.value));
+  selDark.addEventListener("change", () => window.plantt.themes.set("dark", selDark.value));
+  btn.addEventListener("click", (e) => { e.stopPropagation(); pop.hidden = !pop.hidden; if (!pop.hidden) refreshThemeUI(); });
+  document.addEventListener("click", (e) => { if (!pop.hidden && !pop.contains(e.target) && e.target !== btn) pop.hidden = true; });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !pop.hidden) pop.hidden = true; });
+  document.getElementById("theme-import-btn").addEventListener("click", () => { importArea.hidden = !importArea.hidden; importMsg.textContent = ""; });
+  document.getElementById("theme-export-btn").addEventListener("click", () => {
+    const r = window.plantt.themes.export(activeThemeId());
+    if (r.ok) downloadJSON(r.theme.id + ".plantt-theme.json", r.theme);
+  });
+  document.getElementById("theme-export-all-btn").addEventListener("click", () => {
+    downloadJSON("plantt-themes.json", { themes: window.plantt.themes.exportAll().themes });
+  });
+  document.getElementById("theme-import-apply").addEventListener("click", () => doImport(importText.value));
+  importFile.addEventListener("change", () => {
+    const f = importFile.files && importFile.files[0]; if (!f) return;
+    const reader = new FileReader();
+    reader.onload = () => doImport(String(reader.result));
+    reader.readAsText(f);
+  });
+  refreshThemeUI();
+})();
 
 (function initRemoteControl() {
   const params = new URLSearchParams(location.search);
@@ -3077,6 +3275,13 @@ window.plantt = {
       case "getDependents": return { ok: true, data: P.getDependents(cmd.name) };
       case "setModel":      return P.setModel(cmd.model, cmd.summary);
       case "apply":         return P.apply(cmd.ops, cmd.summary);
+      case "themes.list":     return { ok: true, data: P.themes.list() };
+      case "themes.current":  return { ok: true, data: P.themes.current() };
+      case "themes.get":      return { ok: true, data: P.themes.get(cmd.themeId) };
+      case "themes.set":      return P.themes.set(cmd.slot, cmd.themeId);
+      case "themes.import":   return P.themes.import(cmd.theme);
+      case "themes.export":   return cmd.themeId ? P.themes.export(cmd.themeId) : P.themes.exportAll();
+      case "themes.remove":   return P.themes.remove(cmd.themeId);
       default:              return { ok: false, error: "unknown command type: " + cmd.type };
     }
   }

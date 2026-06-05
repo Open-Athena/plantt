@@ -146,6 +146,38 @@ const server = http.createServer(async (req, res) => {
       const r = await enqueue({ type: "setModel", model: body.model, summary: body.summary });
       return send(res, 200, { ok: r.ok, error: r.error, state: lastState });
     }
+    // themes (local-only; follow OS light/dark)
+    if (path === "/themes" && req.method === "GET") {
+      const r = await enqueue({ type: "themes.list" });
+      return send(res, 200, { ok: r.ok, themes: r.data });
+    }
+    if (path === "/theme/current" && req.method === "GET") {
+      const r = await enqueue({ type: "themes.current" });
+      return send(res, 200, { ok: r.ok, current: r.data });
+    }
+    if (path === "/theme/get" && req.method === "GET") {
+      const r = await enqueue({ type: "themes.get", themeId: q.get("id") });
+      return send(res, 200, { ok: r.ok, theme: r.data });
+    }
+    if (path === "/theme/set" && req.method === "POST") {
+      const body = await readBody(req);
+      const r = await enqueue({ type: "themes.set", slot: body.slot, themeId: body.id });
+      return send(res, 200, r);
+    }
+    if (path === "/theme/import" && req.method === "POST") {
+      const body = await readBody(req);
+      const r = await enqueue({ type: "themes.import", theme: body.theme != null ? body.theme : body });
+      return send(res, 200, r);
+    }
+    if (path === "/theme/export" && req.method === "GET") {
+      const r = await enqueue({ type: "themes.export", themeId: q.get("id") || null });
+      return send(res, 200, r);
+    }
+    if (path === "/theme/remove" && req.method === "POST") {
+      const body = await readBody(req);
+      const r = await enqueue({ type: "themes.remove", themeId: body.id });
+      return send(res, 200, r);
+    }
     if (path === "/shutdown" && req.method === "POST") {
       send(res, 200, { ok: true });
       return setImmediate(() => process.exit(0));

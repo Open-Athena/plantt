@@ -31,10 +31,28 @@ keep `src/schema.js` honest*.
 `npm test` is pure Node (no browser) and runs in CI before every Pages deploy, so drift between
 `src/schema.js` and `_applyOp()` will fail the build.
 
+## Themes have ONE source of truth: `src/themes.js`
+
+`src/themes.js` exports `BUILTIN_THEMES`, `TOKENS`/`TOKEN_NAMES` (the canonical CSS-variable set),
+`DEFAULT_THEME_ID`, and `validateTheme()`. Themes are local-only (localStorage), follow the OS
+light/dark preference, and are exposed via `window.plantt.themes` + the relay `/theme*` endpoints.
+
+### If you add/change a theme or token:
+1. A token must exist in **three** places kept in lockstep: `TOKENS` (src/themes.js), the `:root`
+   defaults + `var(--x)` usages in `style.css`, and the `applyThemeColors()` assignment in
+   `src/main.js` (for the SVG render palette). Every built-in theme must define every token.
+2. Run **`npm test`** — `test/themes.test.mjs` asserts every built-in is valid and complete.
+3. Keep the built-in id list in `.claude/skills/plantt-remote/SKILL.md` current.
+
+Plan-DATA colors (`cluster.color`, `capacity.color`, `milestone.line`) are deliberately NOT themed.
+
 ## Remote control
 
 `window.plantt` (gated behind `?agent=1`) is the on-page API: `describe`, `getState`, `outline`,
-`get`, `getDeps`, `getDependents`, `setModel`, and the atomic `apply(ops)`. The
+`get`, `getDeps`, `getDependents`, `setModel`, the atomic `apply(ops)`, and the `themes` namespace
+(`list`/`current`/`set`/`import`/`export`/`remove`). NOTE: relay commands that carry a payload field
+must NOT name it `id` — `enqueue()` overwrites `cmd.id` with the command counter (theme commands use
+`themeId`). The
 `.claude/skills/plantt-remote/relay.mjs` localhost bridge exposes these over HTTP. Keep the relay
 endpoints, the poller `run()` switch in `src/main.js`, and `window.plantt` in sync with each other.
 

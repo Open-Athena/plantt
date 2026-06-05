@@ -148,6 +148,29 @@ Clusters / date markers (by label) and plan fields:
 - `{op:"addCluster", cluster:{label,date,color}}` · `{op:"updateCluster", label, set:{...}}` · `{op:"removeCluster", label}`
 - `{op:"setPlan", set:{title?, note?}}`
 
+## Themes (local-only)
+
+Themes are CSS-variable token sets, stored only in the browser (localStorage) — nothing is
+uploaded. The selection binds one theme to the system **light** slot and one to the **dark** slot;
+the app shows whichever matches the OS `prefers-color-scheme`. Built-in themes ship with the app;
+imported ones live in localStorage and are tagged "imported" in the UI.
+
+```bash
+curl -s http://127.0.0.1:8787/themes                 # → { ok, themes:[{id,name,appearance,builtin}] }
+curl -s http://127.0.0.1:8787/theme/current          # → { ok, current:{light,dark,active,appearance} }
+curl -s 'http://127.0.0.1:8787/theme/get?id=nord'    # → { ok, theme:{...tokens} }
+curl -s -X POST http://127.0.0.1:8787/theme/set    -d '{ "slot":"dark",  "id":"catppuccin-mocha" }'
+curl -s -X POST http://127.0.0.1:8787/theme/set    -d '{ "slot":"light", "id":"solarized-light" }'
+curl -s -X POST http://127.0.0.1:8787/theme/import -d '{ "theme": { "id":"my-theme", "name":"My Theme", "appearance":"dark", "tokens":{ ... }, "barPalette":[ ... ] } }'
+curl -s 'http://127.0.0.1:8787/theme/export?id=nord' # one theme; omit ?id for all custom themes
+curl -s -X POST http://127.0.0.1:8787/theme/remove -d '{ "id":"my-theme" }'
+```
+
+A theme must define every token in `GET /schema` → `themes.tokens` (also `window.plantt.themes.tokens()`).
+Built-in ids: `tufte` (default), `solarized-light`, `solarized-dark`, `latex`, `catppuccin-latte`,
+`catppuccin-mocha`, `nord`, `nord-light`, `gruvbox-light`, `gruvbox-dark`, `dracula`,
+`rose-pine`, `rose-pine-dawn`, `print`. Plan-DATA colors (cluster/capacity/milestone) are not themed.
+
 ## Notes & limits
 
 - Enabled only with `?agent=1`; a normal plantt visit exposes nothing.

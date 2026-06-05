@@ -15,6 +15,29 @@
 <div id="chart-container"></div>
 <div id="tooltip"></div>
 
+<!-- Theme picker (local-only). Populated by src/main.js. -->
+<button id="theme-btn" title="Themes" aria-label="Themes">&#9680;</button>
+<div id="theme-popover" hidden>
+  <div class="tp-title">Theme</div>
+  <label class="tp-row"><span>Light mode</span><select id="theme-light"></select></label>
+  <label class="tp-row"><span>Dark mode</span><select id="theme-dark"></select></label>
+  <div id="theme-active" class="tp-active"></div>
+  <div class="tp-actions">
+    <button id="theme-import-btn">Import&#8230;</button>
+    <button id="theme-export-btn">Export active</button>
+    <button id="theme-export-all-btn">Export custom</button>
+  </div>
+  <div id="theme-import-area" hidden>
+    <textarea id="theme-import-text" placeholder="Paste theme JSON&#8230;" spellcheck="false"></textarea>
+    <div class="tp-actions">
+      <label class="tp-file">Choose file<input type="file" id="theme-import-file" accept="application/json,.json" hidden></label>
+      <button id="theme-import-apply">Add theme</button>
+    </div>
+    <div id="theme-import-msg" class="tp-msg"></div>
+  </div>
+  <div class="tp-note">Themes live only in your browser (localStorage). Nothing is uploaded; import/export is local files only.</div>
+</div>
+
 <div id="editor-panel">
   <div id="panel-resizer"></div>
   <div id="panel-header">
