@@ -1994,6 +1994,7 @@ function openHelpModal() {
     row(k(mod) + k("\u21e7") + k("Z"), "Redo"),
     row(k("Ctrl") + k("Y"), "History tree"),
     row(k("Ctrl") + k("O"), "Plans"),
+    row(k("Ctrl") + k("T"), "Themes"),
     row(k("/"), "Show / hide workstreams (↑↓ or j/k, Enter to toggle)"),
     row(k("c"), "Show / hide the compute-capacity section"),
     row(k("d"), "Cycle dependency lines: all → red only → off (hover reveals a chain)"),
@@ -3227,7 +3228,15 @@ window.plantt = {
   selDark.addEventListener("change", () => window.plantt.themes.set("dark", selDark.value));
   btn.addEventListener("click", (e) => { e.stopPropagation(); pop.hidden = !pop.hidden; if (!pop.hidden) refreshThemeUI(); });
   document.addEventListener("click", (e) => { if (!pop.hidden && !pop.contains(e.target) && e.target !== btn) pop.hidden = true; });
-  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !pop.hidden) pop.hidden = true; });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !pop.hidden) { pop.hidden = true; return; }
+    // Ctrl+T toggles the theme picker (Cmd+T stays the browser's new-tab shortcut).
+    if (e.ctrlKey && !e.metaKey && !e.altKey && (e.key === "t" || e.key === "T")) {
+      e.preventDefault();
+      pop.hidden = !pop.hidden;
+      if (!pop.hidden) refreshThemeUI();
+    }
+  });
   document.getElementById("theme-import-btn").addEventListener("click", () => { importArea.hidden = !importArea.hidden; importMsg.textContent = ""; });
   document.getElementById("theme-export-btn").addEventListener("click", () => {
     const r = window.plantt.themes.export(activeThemeId());
