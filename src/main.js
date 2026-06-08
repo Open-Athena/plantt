@@ -1365,6 +1365,7 @@ function summarize(desc) {
     case "create":       return `Create ${desc.targetType} ${q(desc.targetName)}`;
     case "delete":       return `Delete ${desc.targetType} ${q(desc.targetName)}`;
     case "init":         return "Initial state";
+    case "squash":       return "Squashed baseline";
     case "load":         return d.shared ? "Loaded shared version" : "Loaded plan";
     case "import":       return d.detached ? "Imported (detached)" : "Imported version";
     default:             return desc.verb;
@@ -1593,6 +1594,18 @@ function deleteNode(id) {
   schedulePersist();
   updateHistoryButtons();
   if (vizOpen) renderViz();
+}
+// Collapse the whole tree into a single root carrying the CURRENT state, discarding
+// all other nodes (and thus all undo/redo). model is already the current snapshot.
+function squashHistory() {
+  if (!history) return;
+  const desc = { source: "squash", verb: "squash", targetType: "document",
+    targetName: currentPlan ? currentPlan.name : "plan", details: {} };
+  history = newHistory(model, desc);
+  schedulePersist();
+  updateHistoryButtons();
+  if (vizOpen) renderViz();
+  setStatus("History squashed to a single step", false);
 }
 function serializeHistory() {
   return { rootId: history.rootId, currentId: history.currentId, nextId: history.nextId,
@@ -1881,13 +1894,22 @@ function openHistoryViz() {
     `<div id="viz-modal" role="dialog" aria-modal="true" aria-label="History">
        <div class="viz-head">
          <span class="viz-title">History tree</span>
-         <span class="viz-hint">click a node to scrub \u00b7 right-click to delete a leaf \u00b7 <b>Esc</b> to close</span>
+         <div class="viz-head-right">
+           <span class="viz-hint">click a node to scrub \u00b7 right-click to delete a leaf \u00b7 <b>Esc</b> to close</span>
+           <button type="button" id="viz-squash" title="Collapse the whole history tree into a single step (cannot be undone)">Squash history</button>
+         </div>
        </div>
        <div id="viz-scroll"></div>
      </div>`;
   document.body.appendChild(vizEl);
   vizOpen = true;
   vizEl.addEventListener("pointerdown", (e) => { if (e.target === vizEl) closeViz(); });
+  vizEl.querySelector("#viz-squash").addEventListener("click", () => {
+    const n = history ? history.nodes.size : 0;
+    if (n <= 1) { setStatus("History is already a single step", false); return; }
+    if (!confirm(`Squash all ${n} history steps into one? This permanently discards your undo/redo history and keeps only the current state. This cannot be undone.`)) return;
+    squashHistory();
+  });
   document.addEventListener("keydown", vizKeydown, true);
   renderViz();
 }

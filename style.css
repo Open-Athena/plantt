@@ -249,10 +249,17 @@ body.compact-mode #chart-container { background: var(--surface); padding: 18px; 
   max-height: 86vh; display: flex; flex-direction: column; padding: 14px 16px;
   font-family: var(--font-serif); color: var(--fg);
 }
-.viz-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 8px; }
+.viz-head { display: flex; align-items: baseline; justify-content: space-between; gap: 14px; margin-bottom: 8px; }
+.viz-head-right { display: flex; align-items: baseline; gap: 12px; }
 .viz-title { font-size: 17px; }
 .viz-hint { font-size: 11px; color: var(--faint); font-family: var(--font-mono); }
 .viz-hint b { color: var(--muted); }
+#viz-squash {
+  font-family: var(--font-mono); font-size: 11px; cursor: pointer; white-space: nowrap;
+  border: 1px solid var(--border); background: var(--surface); color: var(--muted);
+  border-radius: 3px; padding: 3px 9px;
+}
+#viz-squash:hover { border-color: var(--danger); color: var(--danger); }
 #viz-scroll { overflow: auto; border: 1px solid var(--border); border-radius: 4px; background: var(--surface); }
 .viz-label { font-family: var(--font-mono); font-size: 10.5px; fill: var(--heading); }
 /* Hovering either the node or its label highlights both (shared full-width row group). */
