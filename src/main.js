@@ -1401,8 +1401,8 @@ function buildDragChange(ds) {
   return { source: "drag", verb: "move", targetType: "task", targetName: name, details: { deltaDays: delta, affectedCount: affected } };
 }
 
-const TASK_FIELDS = ["start", "end", "significance", "cluster", "chips", "link", "tooltip"];
-const MS_FIELDS = ["date", "emoji", "line", "tooltip"];
+const TASK_FIELDS = ["start", "end", "significance", "cluster", "chips", "link", "tooltip", "deps"];
+const MS_FIELDS = ["date", "emoji", "line", "tooltip", "deps"];
 function changedFields(a, b, keys) {
   const out = [];
   for (const k of keys) if (!sameJSON(a ? a[k] : undefined, b ? b[k] : undefined)) out.push(k);
@@ -2607,7 +2607,19 @@ function closeModal() {
   document.removeEventListener("keydown", modalKeydown, true);
 }
 function modalKeydown(e) {
-  if (e.key === "Escape") { e.preventDefault(); closeModal(); }
+  // The dependency picker owns Enter/Escape/Arrows while its search box has focus,
+  // so they pick/dismiss options instead of saving or closing the modal.
+  const inDeps = e.target.classList && e.target.classList.contains("deps-input");
+  if (inDeps && (e.key === "Enter" || e.key === "ArrowDown" || e.key === "ArrowUp")) {
+    e.preventDefault();
+    if (e.key === "Enter") modalEl._depsEnter && modalEl._depsEnter();
+    else modalEl._depsArrow && modalEl._depsArrow(e.key === "ArrowDown" ? 1 : -1);
+    return;
+  }
+  if (e.key === "Escape") {
+    if (inDeps && modalEl._depsCloseMenu && modalEl._depsCloseMenu()) { e.preventDefault(); return; }
+    e.preventDefault(); closeModal();
+  }
   else if (e.key === "Enter" && e.target.tagName !== "TEXTAREA") { e.preventDefault(); modalEl._save(); }
   else if (e.key === "Tab") {
     const f = modalEl.querySelectorAll("input,select,textarea,button");
@@ -2640,6 +2652,87 @@ function openModalShell(title, bodyHtml, onSave) {
   if (first) first.focus();
 }
 function field(label, inner) { return `<label class="modal-field"><span>${esc(label)}</span>${inner}</label>`; }
+
+// Dependency multi-select: chips for chosen items + a fuzzy-search box. Markup only;
+// behaviour is wired by wireDepsPicker() once the modal DOM exists.
+function depsField() {
+  return `<div class="modal-field deps-field"><span>Dependencies</span>
+    <div class="deps-picker">
+      <div class="deps-chips" id="m-deps-chips"></div>
+      <div class="deps-input-wrap">
+        <input id="m-deps-input" class="deps-input" type="text" autocomplete="off" placeholder="Search activities & milestones…">
+        <div class="deps-menu" id="m-deps-menu"></div>
+      </div>
+    </div></div>`;
+}
+// Subsequence fuzzy score: all of q's chars must appear in name in order. Higher is
+// better; rewards contiguous runs and word-start hits; -1 means no match.
+function fuzzyScore(name, q) {
+  const s = name.toLowerCase();
+  let qi = 0, sc = 0, last = -2;
+  for (let i = 0; i < s.length && qi < q.length; i++) {
+    if (s[i] === q[qi]) {
+      sc += (i === last + 1) ? 3 : 1;
+      if (i === 0 || s[i - 1] === " ") sc += 2;
+      last = i; qi++;
+    }
+  }
+  if (qi < q.length) return -1;
+  return sc - s.length * 0.01; // tie-break toward shorter names
+}
+// Wire the dependency picker into the open modal. `selfName` is excluded (no self-deps).
+// Returns a getter for the chosen names. Registers _depsEnter/_depsArrow/_depsCloseMenu
+// hooks consumed by modalKeydown so the global Enter=save / Esc=close don't fire here.
+function wireDepsPicker(selfName, initialDeps) {
+  const chipsEl = modalEl.querySelector("#m-deps-chips");
+  const inputEl = modalEl.querySelector("#m-deps-input");
+  const menuEl = modalEl.querySelector("#m-deps-menu");
+  const names = _allItems(model).map((it) => it.name).filter((n) => n !== selfName);
+  const selected = (initialDeps || []).filter((n) => names.includes(n));
+  let matches = [], active = -1;
+
+  function renderChips() {
+    chipsEl.innerHTML = selected
+      .map((n) => `<span class="deps-chip">${esc(n)}<button type="button" class="deps-chip-x" data-n="${esc(n)}" aria-label="Remove ${esc(n)}">×</button></span>`)
+      .join("");
+    chipsEl.querySelectorAll(".deps-chip-x").forEach((b) =>
+      b.addEventListener("click", () => { remove(b.getAttribute("data-n")); inputEl.focus(); }));
+  }
+  function remove(n) { const i = selected.indexOf(n); if (i >= 0) { selected.splice(i, 1); renderChips(); renderMenu(); } }
+  function add(n) { if (n && !selected.includes(n)) { selected.push(n); renderChips(); } inputEl.value = ""; active = -1; renderMenu(); }
+
+  function renderMenu() {
+    const q = inputEl.value.trim().toLowerCase();
+    const pool = names.filter((n) => !selected.includes(n));
+    matches = q
+      ? pool.map((n) => [n, fuzzyScore(n, q)]).filter((x) => x[1] >= 0).sort((a, b) => b[1] - a[1]).map((x) => x[0]).slice(0, 8)
+      : pool.slice(0, 8);
+    if (active >= matches.length) active = matches.length - 1;
+    if (!matches.length) {
+      menuEl.innerHTML = q ? `<div class="deps-opt deps-empty">No matches</div>` : "";
+      menuEl.classList.toggle("open", !!q);
+      return;
+    }
+    menuEl.innerHTML = matches.map((n, i) => `<div class="deps-opt${i === active ? " active" : ""}" data-i="${i}">${esc(n)}</div>`).join("");
+    menuEl.classList.add("open");
+    menuEl.querySelectorAll(".deps-opt").forEach((o) =>
+      o.addEventListener("mousedown", (e) => { e.preventDefault(); add(matches[+o.getAttribute("data-i")]); }));
+  }
+
+  inputEl.addEventListener("input", () => { active = 0; renderMenu(); });
+  inputEl.addEventListener("focus", renderMenu);
+  inputEl.addEventListener("blur", () => setTimeout(() => menuEl.classList.remove("open"), 120));
+  inputEl.addEventListener("keydown", (e) => {
+    if (e.key === "Backspace" && inputEl.value === "" && selected.length) { e.preventDefault(); remove(selected[selected.length - 1]); }
+  });
+
+  modalEl._depsArrow = (d) => { if (!matches.length) return; active = (active + d + matches.length) % matches.length; renderMenu(); };
+  modalEl._depsEnter = () => { if (active >= 0 && matches[active]) add(matches[active]); };
+  modalEl._depsCloseMenu = () => { if (menuEl.classList.contains("open")) { menuEl.classList.remove("open"); return true; } return false; };
+
+  renderChips();
+  return () => selected.slice();
+}
 
 // Free chips on this task's cluster at its start (capacity minus what other
 // activities are using then) — the default allocation in the modal
@@ -2696,8 +2789,10 @@ function openTaskModal(wsIndex, taskIndex) {
     field("Significance", `<input id="m-sig" type="number" min="0" value="${esc(t.significance != null ? t.significance : "")}">`) +
     field("Cluster", `<select id="m-cluster">${clusterOpts}</select>`) +
     field("Chips", `<input id="m-chips" type="number" min="1" ${maxChips ? `max="${maxChips}"` : ""} value="${esc(chipsVal)}"> <span style="font-size:11px;color:#888">max ${maxChips || "?"}${remChips != null ? ` · ${remChips} free at start` : ""}</span>`) +
+    depsField() +
     field("Link", `<input id="m-link" type="url" value="${esc(t.link || "")}">`) +
     field("Tooltip (markdown)", `<textarea id="m-tip" rows="8">${esc(t.tooltip || "")}</textarea>`);
+  let getDeps = () => (t.deps || []).slice();
   openModalShell("Edit activity", body, () => {
     const g = id => modalEl.querySelector("#" + id);
     const nt = { name: g("m-name").value.trim() || oldName };
@@ -2712,13 +2807,18 @@ function openTaskModal(wsIndex, taskIndex) {
     if (g("m-chips").value !== "") nt.chips = +g("m-chips").value;
     if (g("m-link").value.trim()) nt.link = g("m-link").value.trim();
     if (g("m-tip").value) nt.tooltip = g("m-tip").value;
+    const deps = getDeps();
+    if (deps.length) nt.deps = deps;
     // rename \u2192 repoint any dependents (count them for the history summary)
     let repointed = 0;
-    if (nt.name !== oldName)
+    if (nt.name !== oldName) {
       for (const x of modelTasks()) {
         if (x.start === oldName) { x.start = nt.name; repointed++; }
         else if (Array.isArray(x.start) && x.start[0] === "after" && x.start[1] === oldName) { x.start[1] = nt.name; repointed++; }
       }
+      for (const it of _allItems(model))
+        if (Array.isArray(it.deps) && it.deps.includes(oldName)) { it.deps = it.deps.map((d) => (d === oldName ? nt.name : d)); repointed++; }
+    }
     const newWs = +g("m-ws").value;
     if (newWs === wsIndex) {
       model.workstreams[wsIndex].tasks[taskIndex] = nt; // replace in place (keep order)
@@ -2740,6 +2840,7 @@ function openTaskModal(wsIndex, taskIndex) {
     recordChange(desc);
     commitModel(); closeModal();
   });
+  getDeps = wireDepsPicker(oldName, t.deps);
 }
 
 function openMilestoneModal(wsIndex, msIndex) {
@@ -2750,13 +2851,21 @@ function openMilestoneModal(wsIndex, msIndex) {
     field("Date", `<input id="m-date" type="date" value="${esc(m.date)}">`) +
     field("Emoji", `<input id="m-emoji" type="text" value="${esc(m.emoji || "")}" style="width:4em">`) +
     field("Marker line", `<input id="m-line" type="text" placeholder="#c0392b or empty" value="${esc(m.line || "")}">`) +
+    depsField() +
     field("Tooltip (markdown)", `<textarea id="m-tip" rows="8">${esc(m.tooltip || "")}</textarea>`);
+  let getDeps = () => (m.deps || []).slice();
   openModalShell("Edit milestone", body, () => {
     const g = id => modalEl.querySelector("#" + id);
     const nm = { name: g("m-name").value.trim() || m.name, date: g("m-date").value };
     if (g("m-emoji").value.trim()) nm.emoji = g("m-emoji").value.trim();
     if (g("m-line").value.trim()) nm.line = g("m-line").value.trim();
     if (g("m-tip").value) nm.tooltip = g("m-tip").value;
+    const deps = getDeps();
+    if (deps.length) nm.deps = deps;
+    // rename → repoint every item that depends on this milestone, so deps stay valid
+    if (nm.name !== oldMs.name)
+      for (const it of _allItems(model))
+        if (Array.isArray(it.deps) && it.deps.includes(oldMs.name)) it.deps = it.deps.map((d) => (d === oldMs.name ? nm.name : d));
     model.workstreams[wsIndex].milestones[msIndex] = nm;
     const desc = (nm.name !== oldMs.name)
       ? { source: "modal-milestone", verb: "rename", targetType: "milestone", targetName: nm.name,
@@ -2766,6 +2875,7 @@ function openMilestoneModal(wsIndex, msIndex) {
     recordChange(desc);
     commitModel(); closeModal();
   });
+  getDeps = wireDepsPicker(m.name, m.deps);
 }
 
 // ─── Cluster helpers / direct manipulation / context menu ─────────
