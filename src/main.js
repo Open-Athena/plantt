@@ -674,7 +674,9 @@ function renderSVG(data, layout) {
       svg.appendChild(el("rect", barAttrs));
 
       // Drag highlight — outline the dragged item (and, in the same colour, the
-      // items moving with it) and show their moving dates above the bar
+      // items moving with it). The moving dates are shown by the hover date chips
+      // for the PRIMARY item only (drawn live in renderHighlights), so the drag no
+      // longer paints a date readout on every moving bar.
       if (dragHighlight && dragHighlight.tasks && dragHighlight.tasks.has(t.name)) {
         const isPrimary = t.name === dragHighlight.primary;
         const pad = 2.5;
@@ -683,11 +685,6 @@ function renderSVG(data, layout) {
           fill: "none", stroke: DRAG_HL, "stroke-width": isPrimary ? 2 : 1.25,
           "stroke-dasharray": isPrimary ? "" : "3,2", rx: 3, ry: 3
         }));
-        svg.appendChild(el("text", {
-          x: t.x1, y: barY - pad - 4,
-          "font-family": '"SF Mono", Menlo, monospace', "font-size": "9",
-          fill: DRAG_HL, "text-anchor": "start"
-        }, fmtShort(t.startDate) + " → " + fmtShort(t.endDate)));
       }
 
       // Label — sits left of the bar when it fits there; otherwise flips to the
@@ -920,11 +917,15 @@ function renderSVG(data, layout) {
     }
   }
 
+  // Focus range: scrim over everything outside the chosen window (drawn here, on top
+  // of bars/capacity, so the focused period reads as the only fully-saturated region).
+  drawFocusDim(svg, layout);
+
   // Mouse-following crosshair: full-height guide line + date label under the axis.
   // Always present (hidden until hovered); moved live on mousemove without a re-render.
   const chy1 = layout.axisY + 20, chy2 = layout.svgHeight - 20;
   const cx0 = Math.max(layout.chartLeft, Math.min(crosshair.userX, layout.chartRight));
-  const disp = crosshair.visible ? "inline" : "none";
+  const disp = (crosshair.visible && !dragState) ? "inline" : "none"; // yield to the drag guide
   chLine = el("line", {
     x1: cx0, y1: chy1, x2: cx0, y2: chy2, stroke: RULE,
     "stroke-width": "0.75", "stroke-dasharray": "2,3", opacity: "0.8", display: disp
@@ -945,6 +946,32 @@ function renderSVG(data, layout) {
   svg.appendChild(hlOverlay);
 
   return svg;
+}
+
+// Valid, normalized focus window as [Date, Date], or null when off/unset/unparseable.
+function focusWindow() {
+  if (!focusOn || !focusFrom || !focusTo) return null;
+  let a, b;
+  try { a = parseDate(focusFrom); b = parseDate(focusTo); } catch (e) { return null; }
+  return a <= b ? [a, b] : [b, a];
+}
+function drawFocusDim(svg, layout) {
+  const win = focusWindow();
+  if (!win) return;
+  const top = layout.axisY, bot = layout.svgHeight;
+  const xL = layout.chartLeft, xR = layout.chartRight;
+  const clamp = (x) => Math.max(xL, Math.min(x, xR));
+  const ax = clamp(layout.timeToX(win[0])), bx = clamp(layout.timeToX(win[1]));
+  const scrim = (x, w) => {
+    if (w <= 0.5) return;
+    svg.appendChild(el("rect", { x, y: top, width: w, height: bot - top,
+      fill: BACKGROUND, opacity: FOCUS_OPACITY, "pointer-events": "none" }));
+  };
+  scrim(xL, ax - xL);       // before the window
+  scrim(bx, xR - bx);       // after the window
+  for (const bxr of [ax, bx]) // thin boundary lines at the window edges
+    svg.appendChild(el("line", { x1: bxr, y1: top, x2: bxr, y2: bot,
+      stroke: RULE, "stroke-width": "0.75", opacity: "0.7", "pointer-events": "none" }));
 }
 
 // Move the crosshair without re-rendering the chart
@@ -974,6 +1001,13 @@ let lastLayout = null;   // layout of the most recent render (for drag math)
 let lastSvg = null;      // the rendered <svg> element (for coordinate mapping)
 const TODAY_KEY = "tufte-gantt-today";
 let showTodayLine = localStorage.getItem(TODAY_KEY) !== "0";
+
+// Focus range: dim everything outside [focusFrom, focusTo] so one period stands out.
+// Per-plan view state (saved with the plan, like the today line); not in the URL/undo.
+let focusOn = false;
+let focusFrom = ""; // "YYYY-MM-DD"
+let focusTo = "";   // "YYYY-MM-DD"
+const FOCUS_OPACITY = 0.62; // scrim strength over the de-emphasized regions
 
 // Compact ("page") mode: lay out at a comfortable design width, then scale the
 // whole SVG down to a single 8.5in page width. Same style, just compressed.
@@ -1049,6 +1083,11 @@ function renderHighlights() {
       }
     }
   }
+  // Item hover → show start/end dates in black above the bar (a milestone, being a
+  // single point, shows its one date). During a drag we ignore the stale hover
+  // capture and draw chips for just the PRIMARY dragged item from its live layout.
+  const dh = (dragState && dragState.active && dragHighlight) ? liveDragDateHover() : dateHover;
+  if (dh) drawDateChips(dh);
   // Dependency-chain hover → outline every item in the hovered item's chain
   if (depHoverChain) {
     for (const ws of lastLayout.workstreams) {
@@ -1060,6 +1099,58 @@ function renderHighlights() {
       for (const m of ws.milestones) if (depHoverChain.has(m.name))
         hlOverlay.appendChild(el("circle", { cx: m.x, cy: m.y, r: 8, fill: "none", stroke: DEP_HL, "stroke-width": 2 }));
     }
+  }
+}
+
+// Hover date readout: a small black date label on a background chip, drawn on the
+// overlay so it sits above the bar/label and stays legible. anchor "end" right-aligns
+// to x (date sits to the LEFT of x); "start" left-aligns (date sits to the RIGHT).
+let dateHover = null; // { kind:"task", x1, x2, y, startDate, endDate } | { kind:"milestone", x, y, date }
+const DATE_FONT = '"SF Mono", Menlo, monospace';
+function drawDateChip(x, cy, text, anchor) {
+  const fs = 10, padX = 5;
+  _measureCtx.font = fs + "px " + DATE_FONT; // measure in the SAME font we render in
+  const w = _measureCtx.measureText(text).width;
+  const bgX = anchor === "end" ? x - w - padX
+            : anchor === "middle" ? x - w / 2 - padX
+            : x - padX;
+  hlOverlay.appendChild(el("rect", {
+    x: bgX, y: cy - 8, width: w + 2 * padX, height: 15,
+    fill: BACKGROUND, stroke: FAINT, "stroke-width": 0.5, rx: 2, ry: 2
+  }));
+  hlOverlay.appendChild(el("text", {
+    x, y: cy + 3, "font-family": DATE_FONT,
+    "font-size": fs, fill: TEXT, "text-anchor": anchor
+  }, text));
+}
+// The dragged item's CURRENT position/dates, read from the freshly-rendered layout
+// (dateHover holds the pre-drag capture, which goes stale as the bar moves).
+function liveDragDateHover() {
+  if (!lastLayout) return null;
+  if (dragHighlight.milestone) {
+    const { wsIndex, msIndex } = dragHighlight.milestone;
+    for (const ws of lastLayout.workstreams)
+      for (const m of ws.milestones)
+        if (m.wsIndex === wsIndex && m.msIndex === msIndex)
+          return { kind: "milestone", x: m.x, y: m.y, date: m.date };
+    return null;
+  }
+  const name = dragHighlight.primary;
+  for (const ws of lastLayout.workstreams)
+    for (const t of ws.tasks)
+      if (t.name === name)
+        return { kind: "task", x1: t.x1, x2: t.x2, y: t.y, barH: t.barH, startDate: t.startDate, endDate: t.endDate };
+  return null;
+}
+function drawDateChips(h) {
+  if (h.kind === "task") {
+    // Above the bar, kept within the bar's horizontal span so the chips don't
+    // collide with the name label (left) or cluster annotation (right).
+    const cy = h.y - h.barH / 2 - 10;
+    drawDateChip(h.x1, cy, fmtShort(h.startDate), "start");
+    drawDateChip(h.x2, cy, fmtShort(h.endDate), "end");
+  } else {
+    drawDateChip(h.x, h.y - 13, fmtShort(h.date), "middle");
   }
 }
 
@@ -1704,6 +1795,7 @@ function persistPlan() {
     uuid: currentPlan.uuid, name: currentPlan.name, note: currentPlan.note || "",
     createdAt: currentPlan.createdAt, lastModified: currentPlan.lastModified,
     today: showTodayLine, compact: compactMode, hidden: [...hiddenWs], showCapacity, depsMode,
+    focus: { on: focusOn, from: focusFrom, to: focusTo },
     model, history: serializeHistory(),
   });
   try { localStorage.setItem(CURRENT_PLAN_KEY, currentPlan.uuid); } catch (e) {}
@@ -1730,10 +1822,13 @@ function adoptPlan(p) {
   hiddenWs = new Set(Array.isArray(p.hidden) ? p.hidden : []);
   showCapacity = (typeof p.showCapacity === "boolean") ? p.showCapacity : true;
   depsMode = (typeof p.depsMode === "string") ? p.depsMode : (p.showDeps === false ? "off" : "all"); // migrate old boolean
+  const f = p.focus || {};
+  focusOn = !!f.on; focusFrom = f.from || ""; focusTo = f.to || "";
 }
 function applyTogglesToUI() {
   todayToggle.checked = showTodayLine;
   compactToggle.checked = compactMode;
+  syncFocusUI();
   applyDepsUI();
   document.body.classList.toggle("compact-mode", compactMode);
 }
@@ -2452,7 +2547,8 @@ function onDragMove(e) {
   dragState.lastMoving = dragHighlight;
   dragGuide = target;
   renderFromModel();
-  showDragTip(e, target);
+  // No cursor date-tip here: the live date chips above the dragged bar already show
+  // the moving start/end dates (capacity/annotation drags still use showDragTip).
 }
 
 function onDragUp() {
@@ -2583,8 +2679,18 @@ function addTaskHandles(svg, t) {
   const id = { name: t.name, wsIndex: t.wsIndex, taskIndex: t.taskIndex, link: t.link, tooltip: t.tooltip };
   // Same hover on every sub-element of the activity (body + resize edges), so moving
   // across them keeps one stable highlight instead of toggling at the seams.
-  const hoverOn = () => { if (t.cluster) setClusterHL(t.cluster, t.x1, t.x2); setDepHover(t.name); };
-  const hoverOff = () => { if (t.cluster) setClusterHL(null); setDepHover(null); };
+  const hoverOn = () => {
+    if (t.cluster) setClusterHL(t.cluster, t.x1, t.x2);
+    setDepHover(t.name);
+    dateHover = { kind: "task", x1: t.x1, x2: t.x2, y: t.y, barH: t.barH, startDate: t.startDate, endDate: t.endDate };
+    renderHighlights();
+  };
+  const hoverOff = () => {
+    if (t.cluster) setClusterHL(null);
+    setDepHover(null);
+    dateHover = null;
+    renderHighlights();
+  };
   const body = el("rect", { x: x1, y: yTop, width: w, height: hitH, fill: "transparent", cursor: "grab" });
   attachItemEvents(body, t.tooltip, e => beginDrag("task-body", id, e), () => openTaskModal(t.wsIndex, t.taskIndex));
   body.addEventListener("mouseenter", hoverOn);
@@ -2605,8 +2711,16 @@ function addMilestoneHandles(svg, m, hitW) {
   const rect = el("rect", { x: m.x - 9, y: m.y - 10, width: Math.max(hitW, 18), height: 20, fill: "transparent", cursor: "grab" });
   attachItemEvents(rect, m.tooltip, e => beginDrag("milestone", { wsIndex: m.wsIndex, msIndex: m.msIndex }, e),
     () => openMilestoneModal(m.wsIndex, m.msIndex));
-  rect.addEventListener("mouseenter", () => setDepHover(m.name));
-  rect.addEventListener("mouseleave", () => setDepHover(null));
+  rect.addEventListener("mouseenter", () => {
+    setDepHover(m.name);
+    dateHover = { kind: "milestone", x: m.x, y: m.y, date: m.date };
+    renderHighlights();
+  });
+  rect.addEventListener("mouseleave", () => {
+    setDepHover(null);
+    dateHover = null;
+    renderHighlights();
+  });
   svg.appendChild(rect);
 }
 // Shared wiring: hover tooltip, pointerdown\u2192drag, dblclick\u2192modal
@@ -2813,7 +2927,8 @@ function openTaskModal(wsIndex, taskIndex) {
     field("Chips", `<input id="m-chips" type="number" min="1" ${maxChips ? `max="${maxChips}"` : ""} value="${esc(chipsVal)}"> <span style="font-size:11px;color:#888">max ${maxChips || "?"}${remChips != null ? ` · ${remChips} free at start` : ""}</span>`) +
     depsField() +
     field("Link", `<input id="m-link" type="url" value="${esc(t.link || "")}">`) +
-    field("Tooltip (markdown)", `<textarea id="m-tip" rows="8">${esc(t.tooltip || "")}</textarea>`);
+    field("Tooltip (markdown)", `<textarea id="m-tip" rows="8">${esc(t.tooltip || "")}</textarea>`) +
+    `<div class="modal-del-row"><span></span><button type="button" id="m-delete" class="modal-del">Delete activity</button></div>`;
   let getDeps = () => (t.deps || []).slice();
   openModalShell("Edit activity", body, () => {
     const g = id => modalEl.querySelector("#" + id);
@@ -2863,6 +2978,27 @@ function openTaskModal(wsIndex, taskIndex) {
     commitModel(); closeModal();
   });
   getDeps = wireDepsPicker(oldName, t.deps);
+  modalEl.querySelector("#m-delete").addEventListener("click", () => deleteTask(wsIndex, taskIndex));
+}
+
+// Remove a task, pinning anything that started "after" it to a fixed date so no
+// dangling start reference is left (resolveSpans would otherwise throw). deps that
+// name it are stripped too. One undo step.
+function deleteTask(wsIndex, taskIndex) {
+  const gone = model.workstreams[wsIndex].tasks[taskIndex].name;
+  let resolved = null;
+  try { const c = clone(model); validate(c); resolveSpans(c); resolved = c; } catch (e) { /* fall back to today */ }
+  const resolvedStart = (name) => {
+    if (resolved) for (const ws of resolved.workstreams) for (const rt of ws.tasks) if (rt.name === name) return isoLocal(rt._start);
+    return isoLocal(new Date());
+  };
+  for (const x of modelTasks())
+    if (x.name !== gone && startParent(x) === gone) x.start = ["date", resolvedStart(x.name)];
+  model.workstreams[wsIndex].tasks.splice(taskIndex, 1);
+  for (const it of _allItems(model))
+    if (Array.isArray(it.deps) && it.deps.includes(gone)) it.deps = it.deps.filter((d) => d !== gone);
+  recordChange({ source: "modal-task", verb: "delete", targetType: "task", targetName: gone, details: {} });
+  commitModel(); closeModal();
 }
 
 function openMilestoneModal(wsIndex, msIndex) {
@@ -2874,7 +3010,8 @@ function openMilestoneModal(wsIndex, msIndex) {
     field("Emoji", `<input id="m-emoji" type="text" value="${esc(m.emoji || "")}" style="width:4em">`) +
     field("Marker line", `<input id="m-line" type="text" placeholder="#c0392b or empty" value="${esc(m.line || "")}">`) +
     depsField() +
-    field("Tooltip (markdown)", `<textarea id="m-tip" rows="8">${esc(m.tooltip || "")}</textarea>`);
+    field("Tooltip (markdown)", `<textarea id="m-tip" rows="8">${esc(m.tooltip || "")}</textarea>`) +
+    `<div class="modal-del-row"><span></span><button type="button" id="m-delete" class="modal-del">Delete milestone</button></div>`;
   let getDeps = () => (m.deps || []).slice();
   openModalShell("Edit milestone", body, () => {
     const g = id => modalEl.querySelector("#" + id);
@@ -2898,6 +3035,45 @@ function openMilestoneModal(wsIndex, msIndex) {
     commitModel(); closeModal();
   });
   getDeps = wireDepsPicker(m.name, m.deps);
+  modalEl.querySelector("#m-delete").addEventListener("click", () => {
+    const gone = model.workstreams[wsIndex].milestones[msIndex].name;
+    model.workstreams[wsIndex].milestones.splice(msIndex, 1);
+    for (const it of _allItems(model))
+      if (Array.isArray(it.deps) && it.deps.includes(gone)) it.deps = it.deps.filter((d) => d !== gone);
+    recordChange({ source: "modal-milestone", verb: "delete", targetType: "milestone", targetName: gone, details: {} });
+    commitModel(); closeModal();
+  });
+}
+
+// ─── Remote control popup ─────────────────────────────────────────
+// Flip the page into (or out of) remote mode — ?agent=1, under which an AI agent
+// can drive the plan via the local relay — without anyone hand-editing the URL.
+// The plan lives in the #fragment, which a query-param change preserves across reload.
+function openRemoteModal() {
+  const on = new URLSearchParams(location.search).has("agent");
+  const body = on
+    ? `<p class="remote-lead">Remote control is <b>on</b>. An AI agent (e.g. Claude Code running the <code>plantt-remote</code> skill) can edit this plan through a small relay running on your machine.</p>
+       <ul class="remote-steps">
+         <li>The <b>● remote</b> badge bottom-right shows the live connection.</li>
+         <li>Every remote edit is a normal step — undo it with <kbd>⌘Z</kbd>.</li>
+         <li>Turn it off when you're done so the page stops polling the relay.</li>
+       </ul>`
+    : `<p class="remote-lead">Remote control lets an AI agent (e.g. Claude Code running the <code>plantt-remote</code> skill) edit this plan directly — moving activities, adding workstreams, adjusting capacity — through the app's own undo-tracked internals.</p>
+       <ol class="remote-steps">
+         <li>Ask your agent to <b>control this plantt tab</b>. It starts a small relay on your machine (loopback only).</li>
+         <li>Click <b>Enable</b> below — the page reloads with remote mode on and starts polling that relay.</li>
+         <li>A <b>● remote: connected</b> badge appears bottom-right once it links up.</li>
+       </ol>
+       <p class="remote-note">Nothing turns on until you click Enable, and your plan stays put across the reload.</p>`;
+  openModalShell("Remote control", body, () => {
+    const u = new URL(location.href);
+    if (on) { u.searchParams.delete("agent"); u.searchParams.delete("relay"); }
+    else u.searchParams.set("agent", "1");
+    location.href = u.toString();   // reload; the #fragment (the plan) is preserved
+  });
+  const saveBtn = modalEl.querySelector('[data-act="save"]');
+  saveBtn.textContent = on ? "Turn off remote" : "Enable remote";
+  saveBtn.focus();
 }
 
 // ─── Cluster helpers / direct manipulation / context menu ─────────
@@ -3363,6 +3539,45 @@ compactToggle.addEventListener("change", function () {
   schedulePersist(); // saved with the plan; view toggles are excluded from undo AND the URL
 });
 
+// Focus range — dim everything outside [from, to]. Saved per-plan like the other view
+// toggles (not in the URL/undo). Preset buttons set `to` relative to `from`.
+const focusToggle = document.getElementById("toggle-focus");
+const focusFromEl = document.getElementById("focus-from");
+const focusToEl = document.getElementById("focus-to");
+function syncFocusUI() {
+  focusToggle.checked = focusOn;
+  focusFromEl.value = focusFrom;
+  focusToEl.value = focusTo;
+  document.getElementById("focus-range").hidden = !focusOn;
+}
+function commitFocus() { if (lastValidData) render(lastValidData); schedulePersist(); }
+focusToggle.addEventListener("change", function () {
+  focusOn = this.checked;
+  if (focusOn && (!focusFrom || !focusTo)) {
+    // Seed a sensible default window: from the chart start (or today) for one month.
+    const start = (lastLayout && lastLayout.minDate) ? new Date(lastLayout.minDate) : new Date();
+    focusFrom = focusFrom || isoLocal(start);
+    focusTo = focusTo || isoLocal(addDuration(parseDate(focusFrom), ["months", 1]));
+  }
+  syncFocusUI();
+  commitFocus();
+});
+focusFromEl.addEventListener("change", function () { focusFrom = this.value; commitFocus(); });
+focusToEl.addEventListener("change", function () { focusTo = this.value; commitFocus(); });
+function applyFocusPreset(spec) {
+  if (!focusFrom) {
+    const start = (lastLayout && lastLayout.minDate) ? new Date(lastLayout.minDate) : new Date();
+    focusFrom = isoLocal(start);
+  }
+  focusTo = isoLocal(addDuration(parseDate(focusFrom), spec));
+  if (!focusOn) focusOn = true;
+  syncFocusUI();
+  commitFocus();
+}
+document.getElementById("focus-month").addEventListener("click", () => applyFocusPreset(["months", 1]));
+document.getElementById("focus-8wk").addEventListener("click", () => applyFocusPreset(["weeks", 8]));
+syncFocusUI(); // reflect the plan's saved focus state on first load
+
 // Mouse-following crosshair across the whole chart
 container.addEventListener("mousemove", function (e) { updateCrosshair(e.clientX); });
 container.addEventListener("mouseleave", hideCrosshair);
@@ -3466,6 +3681,7 @@ document.getElementById("undo-btn").addEventListener("click", undo);
 document.getElementById("redo-btn").addEventListener("click", redo);
 document.getElementById("history-btn").addEventListener("click", openHistoryViz);
 document.getElementById("plans-btn").addEventListener("click", openPlansModal);
+document.getElementById("remote-btn").addEventListener("click", openRemoteModal);
 document.getElementById("help-btn").addEventListener("click", openHelpModal);
 
 // ─── Initial Render ──────────────────────────────────────────────

@@ -40,3 +40,27 @@ localhost relay — see [`.claude/skills/plantt-remote`](.claude/skills/plantt-r
 It exposes a `window.plantt` API (`describe`, `getState`, `outline`, `getDeps`, `getDependents`,
 `setModel`, an atomic name-addressed `apply(ops)`, and a `themes` namespace); a normal visit
 (without `?agent=1`) exposes nothing reachable.
+
+### Installing the skill
+
+The skill is one self-contained folder — [`.claude/skills/plantt-remote/`](.claude/skills/plantt-remote)
+— holding `SKILL.md` (the instructions) and `relay.mjs` (the localhost bridge). It has **no build
+step and no runtime dependency on this repo**: it drives a running plantt tab and pulls the live
+schema from the app itself (`GET /schema`). It needs only Node.js (to run the relay) and `curl`.
+
+**Claude Code / any agent that reads `~/.claude/skills/`:**
+- *Working inside this repo* — nothing to do. Project skills under `.claude/skills/` are
+  auto-discovered whenever the working directory is in the plantt checkout.
+- *Globally (every project)* — symlink it into your user skills dir so it stays in lockstep with
+  the repo copy:
+  ```bash
+  ln -s "$PWD/.claude/skills/plantt-remote" ~/.claude/skills/plantt-remote
+  ```
+  Use `cp -R` instead for a detached copy — but a copy won't track schema/op changes, and this
+  skill's value is staying in sync with `src/schema.js`, so prefer the symlink.
+
+**Any other shell-capable LLM agent** (no `~/.claude/skills` convention): `SKILL.md` is plain
+Markdown — load or paste its contents into the agent's context as instructions. That's the entire
+interface; the agent then runs `node relay.mjs` and drives it with `curl` exactly as the file
+describes. (Portable toolkits can also vendor the folder and copy it into `~/.claude/skills/` on
+setup.)
