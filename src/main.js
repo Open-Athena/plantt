@@ -629,14 +629,19 @@ function renderSVG(data, layout) {
 
   // Workstreams
   for (const ws of layout.workstreams) {
-    // Workstream header — double-click to add an annotation to this workstream
+    // Workstream header — double-click to edit the workstream (rename / note /
+    // add annotation / delete). Annotation-adding lives inside that modal now.
     const wsHdr = el("text", {
       x: layout.chartLeft, y: ws.y + 18, cursor: "pointer",
       "font-family": '"ET Book", Palatino, Georgia, serif',
       "font-size": "14", fill: HEADING, "font-weight": "bold",
       "letter-spacing": "0.3"
     }, ws.name);
-    wsHdr.addEventListener("dblclick", ((nm) => (e) => { e.preventDefault(); openAnnotationModal(null, { target: nm, edge: "top" }); })(ws.name));
+    wsHdr.addEventListener("dblclick", ((nm) => (e) => {
+      e.preventDefault();
+      const wi = model.workstreams.findIndex((w) => w.name === nm);
+      if (wi >= 0) openWorkstreamEditModal(wi);
+    })(ws.name));
     svg.appendChild(wsHdr);
 
     // Workstream note
@@ -2209,7 +2214,7 @@ function openHelpModal() {
     row("double-click \u201cCompute capacity\u201d", "Add a new cluster"),
     row("drag a lane handle", "Move a cluster\u2019s retire date or a change-event"),
     row("right-click a capacity lane", "Quick menu: edit / duplicate / reorder / delete"),
-    row("double-click a workstream name", "Add an annotation to that band"),
+    row("double-click a workstream name", "Edit it: rename / note / add annotation / delete"),
     row("drag an annotation", "Move its date (⌥ weeks · ⌘ months · default days)"),
     row("double-click an annotation", "Edit / delete that annotation"),
     row("hover a bar or pool", "Highlight the linked capacity / activities"),
@@ -3043,6 +3048,68 @@ function openMilestoneModal(wsIndex, msIndex) {
     recordChange({ source: "modal-milestone", verb: "delete", targetType: "milestone", targetName: gone, details: {} });
     commitModel(); closeModal();
   });
+}
+
+// Edit a workstream: rename, note, add an annotation, or delete the whole lane.
+// Opened by double-clicking the workstream header.
+function openWorkstreamEditModal(wsIndex) {
+  const ws = model.workstreams[wsIndex];
+  const oldName = ws.name;
+  const oldWs = clone(ws);
+  const nT = ws.tasks.length, nM = (ws.milestones || []).length;
+  const counts = `${nT} task${nT !== 1 ? "s" : ""} · ${nM} milestone${nM !== 1 ? "s" : ""}`;
+  const body =
+    field("Name", `<input id="w-name" type="text" value="${esc(ws.name)}">`) +
+    field("Note", `<input id="w-note" type="text" value="${esc(ws.note || "")}" placeholder="optional subtitle">`) +
+    `<div class="modal-del-row"><button type="button" id="w-add-ann" class="bar-btn">Add annotation…</button></div>` +
+    `<div class="modal-del-row"><span style="font-size:11px;color:#888">${counts}</span><button type="button" id="w-delete" class="modal-del">Delete workstream</button></div>`;
+  openModalShell("Edit workstream", body, () => {
+    const g = (id) => modalEl.querySelector("#" + id);
+    const newName = g("w-name").value.trim() || oldName;
+    if (newName !== oldName && model.workstreams.some((w, i) => i !== wsIndex && w.name === newName)) {
+      setStatus(`A workstream named "${newName}" already exists`, true); return;
+    }
+    if (newName !== oldName) {
+      ws.name = newName;
+      // workstreams are referenced by name by annotations + the hidden-sections set
+      if (Array.isArray(model.annotations)) for (const a of model.annotations) if (a.target === oldName) a.target = newName;
+      if (hiddenWs.has(oldName)) { hiddenWs.delete(oldName); hiddenWs.add(newName); }
+    }
+    const note = g("w-note").value;
+    if (note) ws.note = note; else delete ws.note;
+    const desc = (newName !== oldName)
+      ? { source: "modal-ws", verb: "rename", targetType: "workstream", targetName: newName, details: { oldName, newName } }
+      : { source: "modal-ws", verb: "edit", targetType: "workstream", targetName: newName, details: { fields: changedFields(oldWs, ws, ["note"]) } };
+    recordChange(desc); commitModel(); closeModal();
+  });
+  modalEl.querySelector("#w-add-ann").addEventListener("click", () => { closeModal(); openAnnotationModal(null, { target: oldName, edge: "top" }); });
+  modalEl.querySelector("#w-delete").addEventListener("click", () => deleteWorkstream(wsIndex));
+}
+
+// Remove a workstream and everything in it. Tasks elsewhere that started "after" one
+// of its tasks are pinned to their resolved date (no dangling start ref), deps naming
+// any removed item are stripped, and annotations targeting this lane are dropped.
+function deleteWorkstream(wsIndex) {
+  const ws = model.workstreams[wsIndex];
+  const goneName = ws.name;
+  const goneItems = new Set([...ws.tasks.map((t) => t.name), ...(ws.milestones || []).map((m) => m.name)]);
+  let resolved = null;
+  try { const c = clone(model); validate(c); resolveSpans(c); resolved = c; } catch (e) { /* fall back to today */ }
+  const resolvedStart = (name) => {
+    if (resolved) for (const w of resolved.workstreams) for (const rt of w.tasks) if (rt.name === name) return isoLocal(rt._start);
+    return isoLocal(new Date());
+  };
+  model.workstreams.forEach((w, wi) => {
+    if (wi === wsIndex) return;
+    for (const t of w.tasks) { const p = startParent(t); if (p && goneItems.has(p)) t.start = ["date", resolvedStart(t.name)]; }
+  });
+  model.workstreams.splice(wsIndex, 1);
+  for (const it of _allItems(model))
+    if (Array.isArray(it.deps)) it.deps = it.deps.filter((d) => !goneItems.has(d));
+  if (Array.isArray(model.annotations)) model.annotations = model.annotations.filter((a) => a.target !== goneName);
+  hiddenWs.delete(goneName);
+  recordChange({ source: "modal-ws", verb: "delete", targetType: "workstream", targetName: goneName, details: {} });
+  commitModel(); closeModal();
 }
 
 // ─── Remote control popup ─────────────────────────────────────────
