@@ -58,6 +58,20 @@ headers that let the page reach loopback (verified on Chrome 148).
    curl -s http://127.0.0.1:8787/state               # → { ok, state:{uuid,name,model} }  (full)
    ```
 
+   All of the above target the **active** plan. To work across **all saved plans** (the tab can hold
+   many; only one is active at a time), use the `/plans*` endpoints — `list`/`get` read any plan
+   without switching; `open`/`duplicate`/`create` change which plan is active (same as clicking in
+   the UI). This is how you read or copy a plan the user doesn't currently have open:
+   ```bash
+   curl -s http://127.0.0.1:8787/plans                       # → { ok, plans:[{uuid,name,lastModified,active}] }
+   curl -s 'http://127.0.0.1:8787/plans/get?uuid=<uuid>'     # → { ok, plan:{uuid,name,model} }  (no switch)
+   curl -s -X POST http://127.0.0.1:8787/plans/open      -d '{ "uuid":"<uuid>" }'
+   curl -s -X POST http://127.0.0.1:8787/plans/duplicate -d '{ "uuid":"<uuid>", "name":"Copy", "open":true }'
+   curl -s -X POST http://127.0.0.1:8787/plans/create    -d '{ "name":"New", "model":{...}, "open":true }'
+   ```
+   To duplicate plan A into a new plan stripped of milestones/clusters without leaving the active
+   plan: `GET /plans/get?uuid=A` → strip locally → `POST /plans/create { name, model }`.
+
 5. **Apply the edit with `/apply`** — a batch of name-addressed ops applied atomically as ONE undo
    step. Don't read-modify-write the whole model unless you truly need to:
    ```bash

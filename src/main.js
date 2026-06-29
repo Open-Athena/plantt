@@ -3863,6 +3863,12 @@ window.plantt = {
         note: "Themes are local-only (localStorage), follow the OS light/dark preference, and bind " +
           "one theme to each system slot. Manage via window.plantt.themes / the relay /theme* endpoints.",
       },
+      plans: {
+        note: "Saved-plan management via window.plantt.plans / the relay /plans* endpoints. " +
+          "list() and get(uuid) read across ALL saved plans without switching; open(uuid), " +
+          "duplicate(uuid,name) and create(name,model) change the active plan. All other reads/writes " +
+          "(getState, outline, apply, …) target the ACTIVE plan only.",
+      },
     };
   },
   // ── reads ──
@@ -3907,6 +3913,48 @@ window.plantt = {
     recordChange({ source: "remote", verb: "replace", details: { label: summary || _summarizeOps(ops) } });
     commitModel();
     return { ok: true, applied: ops.length };
+  },
+  // ── plans (saved-plan management; each plan has its own model + history) ──
+  // Lets a remote agent see and move between ALL saved plans, not just the active
+  // one. Plans live in localStorage. list()/get() never switch the active plan;
+  // open()/duplicate()/create() do, exactly like opening a plan in the UI.
+  plans: {
+    list() {
+      return listPlans().map((p) => ({
+        uuid: p.uuid, name: p.name, note: p.note || "",
+        createdAt: p.createdAt, lastModified: p.lastModified,
+        active: !!(currentPlan && currentPlan.uuid === p.uuid),
+      }));
+    },
+    // Read any saved plan's full model WITHOUT switching to it.
+    get(uuid) {
+      const p = loadPlan(uuid);
+      return p ? { uuid: p.uuid, name: p.name, model: clone(p.model) } : null;
+    },
+    // Make `uuid` the active plan (what every other read/write then targets).
+    open(uuid) {
+      if (!loadPlan(uuid)) return { ok: false, error: "no saved plan with uuid " + uuid };
+      switchPlan(uuid);
+      return { ok: true, uuid, name: currentPlan.name };
+    },
+    // Copy a saved plan into a new one (fresh uuid + history). Switches to it unless open:false.
+    duplicate(uuid, name, opts) {
+      const p = loadPlan(uuid);
+      if (!p) return { ok: false, error: "no saved plan with uuid " + uuid };
+      const obj = createPlanObj(name || (p.name || "Plan") + " (copy)", p.model);
+      writePlanStore(obj);
+      if (!opts || opts.open !== false) switchPlan(obj.uuid);
+      return { ok: true, uuid: obj.uuid, name: obj.name };
+    },
+    // Create a fresh plan from `model` (validated) or empty. Switches to it unless open:false.
+    create(name, model, opts) {
+      const md = model || emptyModel(name);
+      try { migrateModel(md); validate(md); } catch (e) { return { ok: false, error: e.message }; }
+      const obj = createPlanObj(name || "Untitled plan", md);
+      writePlanStore(obj);
+      if (!opts || opts.open !== false) switchPlan(obj.uuid);
+      return { ok: true, uuid: obj.uuid, name: obj.name };
+    },
   },
   // ── themes (local-only; follow the OS light/dark preference) ──
   themes: {
@@ -4126,6 +4174,11 @@ window.plantt = {
       case "getDependents": return { ok: true, data: P.getDependents(cmd.name) };
       case "setModel":      return P.setModel(cmd.model, cmd.summary);
       case "apply":         return P.apply(cmd.ops, cmd.summary);
+      case "plans.list":      return { ok: true, data: P.plans.list() };
+      case "plans.get":       return { ok: true, data: P.plans.get(cmd.uuid) };
+      case "plans.open":      return P.plans.open(cmd.uuid);
+      case "plans.duplicate": return P.plans.duplicate(cmd.uuid, cmd.name, { open: cmd.open !== false });
+      case "plans.create":    return P.plans.create(cmd.name, cmd.model, { open: cmd.open !== false });
       case "themes.list":     return { ok: true, data: P.themes.list() };
       case "themes.current":  return { ok: true, data: P.themes.current() };
       case "themes.get":      return { ok: true, data: P.themes.get(cmd.themeId) };

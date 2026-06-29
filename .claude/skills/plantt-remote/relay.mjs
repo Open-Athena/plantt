@@ -146,6 +146,30 @@ const server = http.createServer(async (req, res) => {
       const r = await enqueue({ type: "setModel", model: body.model, summary: body.summary });
       return send(res, 200, { ok: r.ok, error: r.error, state: lastState });
     }
+    // plans (saved-plan management; list/get don't switch, open/duplicate/create do)
+    if (path === "/plans" && req.method === "GET") {
+      const r = await enqueue({ type: "plans.list" });
+      return send(res, 200, { ok: r.ok, plans: r.data });
+    }
+    if (path === "/plans/get" && req.method === "GET") {
+      const r = await enqueue({ type: "plans.get", uuid: q.get("uuid") });
+      return send(res, 200, { ok: r.ok, plan: r.data });
+    }
+    if (path === "/plans/open" && req.method === "POST") {
+      const body = await readBody(req);
+      const r = await enqueue({ type: "plans.open", uuid: body.uuid });
+      return send(res, 200, { ...r, state: lastState });
+    }
+    if (path === "/plans/duplicate" && req.method === "POST") {
+      const body = await readBody(req);
+      const r = await enqueue({ type: "plans.duplicate", uuid: body.uuid, name: body.name, open: body.open });
+      return send(res, 200, { ...r, state: lastState });
+    }
+    if (path === "/plans/create" && req.method === "POST") {
+      const body = await readBody(req);
+      const r = await enqueue({ type: "plans.create", name: body.name, model: body.model, open: body.open });
+      return send(res, 200, { ...r, state: lastState });
+    }
     // themes (local-only; follow OS light/dark)
     if (path === "/themes" && req.method === "GET") {
       const r = await enqueue({ type: "themes.list" });
