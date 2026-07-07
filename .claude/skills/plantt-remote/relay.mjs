@@ -131,6 +131,18 @@ const server = http.createServer(async (req, res) => {
       const r = await enqueue({ type: "getDependents", name: q.get("name") });
       return send(res, 200, { ok: r.ok, dependents: r.data });
     }
+    // visibility (view-only hide/show of activities/milestones/workstreams/clusters
+    // by name; not a model edit, not in undo). Body: { names:[...] } or { name }.
+    if (path === "/hidden" && req.method === "GET") {
+      const r = await enqueue({ type: "visibility.hidden" });
+      return send(res, 200, { ok: r.ok, hidden: r.data });
+    }
+    if ((path === "/hide" || path === "/show" || path === "/toggle") && req.method === "POST") {
+      const body = await readBody(req);
+      const names = body.names != null ? body.names : body.name;
+      const r = await enqueue({ type: "visibility." + path.slice(1), names });
+      return send(res, 200, { ...r, state: lastState });
+    }
     // writes
     if (path === "/apply" && req.method === "POST") {
       const body = await readBody(req);
@@ -168,6 +180,29 @@ const server = http.createServer(async (req, res) => {
     if (path === "/plans/create" && req.method === "POST") {
       const body = await readBody(req);
       const r = await enqueue({ type: "plans.create", name: body.name, model: body.model, open: body.open });
+      return send(res, 200, { ...r, state: lastState });
+    }
+    // history (per-plan undo TREE; tree/get read any plan, jump/undo/redo move the active one)
+    if (path === "/history" && req.method === "GET") {
+      const r = await enqueue({ type: "history.tree", uuid: q.get("uuid") });
+      return send(res, 200, { ok: r.ok, tree: r.data });
+    }
+    if (path === "/history/get" && req.method === "GET") {
+      // NB: field is `nodeId`, not `id` — enqueue() overwrites `id` with its ack-tracking counter.
+      const r = await enqueue({ type: "history.get", nodeId: q.get("id"), uuid: q.get("uuid") });
+      return send(res, 200, { ok: r.ok, model: r.data });
+    }
+    if (path === "/history/jump" && req.method === "POST") {
+      const body = await readBody(req);
+      const r = await enqueue({ type: "history.jump", nodeId: body.id });
+      return send(res, 200, { ...r, state: lastState });
+    }
+    if (path === "/history/undo" && req.method === "POST") {
+      const r = await enqueue({ type: "history.undo" });
+      return send(res, 200, { ...r, state: lastState });
+    }
+    if (path === "/history/redo" && req.method === "POST") {
+      const r = await enqueue({ type: "history.redo" });
       return send(res, 200, { ...r, state: lastState });
     }
     // themes (local-only; follow OS light/dark)

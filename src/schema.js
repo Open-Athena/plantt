@@ -59,9 +59,11 @@ export const SCHEMA = {
     note: "string? — subtitle/description",
     annotations:
       "array? of dated markers pinned to a band edge: { text:string, date:'YYYY-MM-DD', " +
-      "target:'<workstream name>'|'@compute' (the compute-capacity section), " +
-      "edge:'top'|'bottom' (default 'bottom'), color?:'#hex' (defaults to the band colour), " +
-      "icon?:string (default '↓') }. Free-form labels; NOT the compute pools (those are `capacity`).",
+      "target:'<workstream name>'|'@compute' (the compute-capacity section)|'<task or milestone name>'|" +
+      "'<cluster name>' (pins to that specific activity/milestone row or compute lane), " +
+      "edge:'top'|'bottom' (default 'bottom'), color?:'#hex' (defaults to the target's colour), " +
+      "icon?:string (default '↓') }. An unknown or hidden target is skipped at render. " +
+      "Free-form labels; NOT the compute pools (those are `capacity`).",
     capacity:
       "array? of compute pools (utilization lanes under the chart): { name:string (referenced " +
       "by a task's `cluster`), chip:<one of chips>, chips:number (initial count at `from`), " +
@@ -121,7 +123,7 @@ export const OPS = {
   removeCapacity: "{ name } — remove a pool; drops now-dangling task.cluster refs",
   moveCapacity: "{ name, toIndex } — reorder a pool (lane order)",
   // — annotations (dated band-edge markers) — addressed by index into `annotations` —
-  addAnnotation: "{ annotation:{ text, date, target:'<workstream>'|'@compute', edge?:'top'|'bottom', color?, icon? } }",
+  addAnnotation: "{ annotation:{ text, date, target:'<workstream>'|'@compute'|'<task|milestone name>'|'<cluster name>', edge?:'top'|'bottom', color?, icon? } }",
   updateAnnotation: "{ index, set:{...} }",
   removeAnnotation: "{ index }",
   setPlan: "{ set:{ title?, note? } } — plan-level fields",

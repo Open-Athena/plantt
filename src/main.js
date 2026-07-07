@@ -204,11 +204,13 @@ function computeLayout(data, containerWidth) {
   for (const ws of data.workstreams) {
     if (hiddenWs.has(ws.name)) continue; // hidden workstreams don't drive the time range
     for (const t of ws.tasks) {
+      if (hiddenItems.has(t.name)) continue; // hidden activities don't drive the range
       if (t._start < minDate) minDate = +t._start;
       if (t._end > maxDate) maxDate = +t._end;
     }
     if (ws.milestones) {
       for (const m of ws.milestones) {
+        if (hiddenItems.has(m.name)) continue;
         const md = parseDate(m.date);
         if (+md < minDate) minDate = +md;
         if (+md > maxDate) maxDate = +md;
@@ -251,6 +253,7 @@ function computeLayout(data, containerWidth) {
     const taskLayouts = [];
     for (let ti = 0; ti < ws.tasks.length; ti++) {
       const t = ws.tasks[ti];
+      if (hiddenItems.has(t.name)) continue; // hidden activity: drop the row (ti stays model-aligned)
       // Absolute thickness: significance × fixed px (consistent across all
       // workstreams), clamped to the row height so bars never overlap.
       const barH = t.significance != null
@@ -270,6 +273,7 @@ function computeLayout(data, containerWidth) {
         lagX,
         y: y + TASK_ROW_HEIGHT / 2,
         rowY: y,
+        rowBottom: y + TASK_ROW_HEIGHT, // for annotations pinned to this activity
         wsIndex: wi, taskIndex: ti,
         startDate: t._start, endDate: t._end
       });
@@ -290,7 +294,7 @@ function computeLayout(data, containerWidth) {
           leftX: x - 8,                                   // marker extends left
           rightX: x + 12 + measureText(m.name, MS_LABEL_PX) // label extends right
         };
-      });
+      }).filter((it) => !hiddenItems.has(it.name)); // hidden milestones drop out
       items.sort((a, b) => a.leftX - b.leftX);
       const laneEnd = []; // rightmost occupied x per lane
       for (const it of items) {
@@ -304,7 +308,8 @@ function computeLayout(data, containerWidth) {
           name: it.name, tooltip: it.tooltip, emoji: it.emoji, line: it.line,
           x: it.x, date: it.date, wsIndex: wi, msIndex: it.mi,
           y: y + it.lane * MILESTONE_ROW_HEIGHT + MILESTONE_ROW_HEIGHT / 2,
-          rowY: y + it.lane * MILESTONE_ROW_HEIGHT
+          rowY: y + it.lane * MILESTONE_ROW_HEIGHT,
+          rowBottom: y + it.lane * MILESTONE_ROW_HEIGHT + MILESTONE_ROW_HEIGHT // for annotations pinned here
         });
       }
       y += laneEnd.length * MILESTONE_ROW_HEIGHT;
@@ -321,7 +326,7 @@ function computeLayout(data, containerWidth) {
   // Lane height encodes the pool size (chips, capped); grey = total capacity,
   // colour = chips in use by activities at each moment.
   let capacityLayout = null;
-  if (showCapacity && Array.isArray(data.capacity) && data.capacity.length) {
+  if (showCapacity && Array.isArray(data.capacity) && data.capacity.some((c) => !hiddenCaps.has(c.name))) {
     const capY = y;
     y += WS_HEADER_HEIGHT + WS_NOTE_HEIGHT;
     const clampX = (ms) => Math.max(chartLeft, Math.min(timeToX(new Date(ms)), chartRight));
@@ -353,6 +358,7 @@ function computeLayout(data, containerWidth) {
 
     const rows = [];
     for (const cl of data.capacity) {
+      if (hiddenCaps.has(cl.name)) continue; // hidden cluster: no lane drawn
       const from = +parseDate(cl.from), to = cl.to ? +parseDate(cl.to) : +maxDate;
       const maxThick = flopsThickness(poolFlops(cl));
       const slotH = Math.max(maxThick, 14) + 12;
@@ -507,6 +513,33 @@ function addTooltipTarget(parent, hitRect, md, link) {
   parent.appendChild(hit);
 }
 
+// Resolve an annotation's `target` to a y-band + default colour. Targets:
+//   "@compute"            → the compute-capacity section
+//   "<workstream name>"   → that workstream band
+//   "<task|milestone>"    → that specific activity/milestone row
+//   "<cluster name>"      → that capacity lane
+// Returns null when the target is unknown OR currently hidden (so it's skipped).
+function resolveAnnoTarget(layout, target, edge) {
+  const top = edge === "top";
+  if (target === "@compute") {
+    if (!layout.capacity) return null;
+    return { bandY: top ? layout.capacity.headerY - 4 : layout.capacity.yBottom + 11, color: MUTED_TEXT };
+  }
+  const ws = layout.workstreams.find((w) => w.name === target);
+  if (ws) return { bandY: top ? ws.y - 4 : ws.yBottom + 11, color: ws.color };
+  // A specific activity or milestone, pinned to its own row.
+  for (const wl of layout.workstreams) {
+    const it = wl.tasks.find((t) => t.name === target) || wl.milestones.find((m) => m.name === target);
+    if (it) return { bandY: top ? it.rowY - 2 : it.rowBottom + 9, color: wl.color };
+  }
+  // A compute cluster, pinned to its lane.
+  if (layout.capacity) {
+    const row = layout.capacity.rows.find((r) => r.name === target);
+    if (row) return { bandY: top ? row.centerY - row.slotH / 2 - 3 : row.centerY + row.slotH / 2 + 10, color: row.color };
+  }
+  return null;
+}
+
 function renderSVG(data, layout) {
   const svg = el("svg", {
     width: layout.svgWidth, height: layout.svgHeight,
@@ -573,18 +606,12 @@ function renderSVG(data, layout) {
       if (!a || !a.date) return;
       const cd = parseDate(a.date);
       if (cd < layout.minDate || cd > layout.maxDate) return;
-      // Resolve the target band → y position + default colour
-      let bandY, defColor;
-      if (a.target === "@compute") {
-        if (!layout.capacity) return; // compute section hidden
-        bandY = (a.edge === "top") ? layout.capacity.headerY - 4 : layout.capacity.yBottom + 11;
-        defColor = MUTED_TEXT;
-      } else {
-        const wl = layout.workstreams.find((w) => w.name === a.target);
-        if (!wl) return; // unknown or hidden workstream
-        bandY = (a.edge === "top") ? wl.y - 4 : wl.yBottom + 11;
-        defColor = wl.color;
-      }
+      // Resolve the target → y position + default colour. A target can be the
+      // compute section ("@compute"), a workstream, or a specific activity,
+      // milestone or cluster (by name). Unknown/hidden targets are skipped.
+      const res = resolveAnnoTarget(layout, a.target, a.edge);
+      if (!res) return;
+      const bandY = res.bandY, defColor = res.color;
       const cx = layout.timeToX(cd);
       const col = a.color || defColor;
       const labelStr = (a.icon || "↓") + " " + (a.text || "");
@@ -1025,6 +1052,8 @@ let compactMode = localStorage.getItem(COMPACT_KEY) === "1";
 // and never recorded in the undo history): which workstreams are hidden, and whether
 // the compute-capacity section is shown.
 let hiddenWs = new Set();
+let hiddenItems = new Set(); // hidden tasks/milestones (by name) — view-state, like hiddenWs
+let hiddenCaps = new Set();  // hidden capacity pools (by name) — view-state
 let showCapacity = true;
 let depsMode = "all"; // dependency display: "all" | "violations" (red only) | "off" (reveal on hover)
 const DEPS_LABEL = { all: "all", violations: "red only", off: "off" };
@@ -1799,7 +1828,8 @@ function persistPlan() {
   writePlanStore({
     uuid: currentPlan.uuid, name: currentPlan.name, note: currentPlan.note || "",
     createdAt: currentPlan.createdAt, lastModified: currentPlan.lastModified,
-    today: showTodayLine, compact: compactMode, hidden: [...hiddenWs], showCapacity, depsMode,
+    today: showTodayLine, compact: compactMode, hidden: [...hiddenWs],
+    hiddenItems: [...hiddenItems], hiddenCaps: [...hiddenCaps], showCapacity, depsMode,
     focus: { on: focusOn, from: focusFrom, to: focusTo },
     model, history: serializeHistory(),
   });
@@ -1825,6 +1855,8 @@ function adoptPlan(p) {
   if (typeof p.today === "boolean") showTodayLine = p.today;
   if (typeof p.compact === "boolean") compactMode = p.compact;
   hiddenWs = new Set(Array.isArray(p.hidden) ? p.hidden : []);
+  hiddenItems = new Set(Array.isArray(p.hiddenItems) ? p.hiddenItems : []);
+  hiddenCaps = new Set(Array.isArray(p.hiddenCaps) ? p.hiddenCaps : []);
   showCapacity = (typeof p.showCapacity === "boolean") ? p.showCapacity : true;
   depsMode = (typeof p.depsMode === "string") ? p.depsMode : (p.showDeps === false ? "off" : "all"); // migrate old boolean
   const f = p.focus || {};
@@ -3936,6 +3968,20 @@ window.plantt = {
           "duplicate(uuid,name) and create(name,model) change the active plan. All other reads/writes " +
           "(getState, outline, apply, …) target the ACTIVE plan only.",
       },
+      visibility: {
+        note: "Hide/show items by name via window.plantt.visibility / the relay endpoints " +
+          "GET /hidden, POST /hide, /show, /toggle (body { names:[...] } or { name }). Works on " +
+          "activities, milestones, workstreams and clusters. Hiding is a VIEW preference (persisted " +
+          "locally, never in the plan JSON or undo) — to delete for real, use the remove* ops. " +
+          "Annotations target a workstream, '@compute', or any activity/milestone/cluster name.",
+      },
+      history: {
+        note: "Per-plan undo TREE (branches, not a linear stack) via window.plantt.history / the " +
+          "relay endpoints GET /history[?uuid], GET /history/get?id[&uuid], POST /history/jump {id}, " +
+          "/history/undo, /history/redo. tree() and get(id) read ANY saved plan without switching; " +
+          "jump/undo/redo move the ACTIVE plan (plans.open another plan first to navigate it). Each " +
+          "node has { id, parentId, childIds, activeChild, summary, verb, ts }; currentId marks the tip.",
+      },
     };
   },
   // ── reads ──
@@ -3981,6 +4027,44 @@ window.plantt = {
     commitModel();
     return { ok: true, applied: ops.length };
   },
+  // ── visibility (view-only hide/show; NOT a model edit, NOT in undo history) ──
+  // Hide/show activities, milestones, workstreams and clusters by name. Hiding is
+  // a per-plan view preference (persisted in localStorage like the workstream
+  // toggles), so it never touches the plan JSON, the shareable URL, or undo.
+  visibility: {
+    // What's currently hidden, grouped by kind.
+    hidden() {
+      return { workstreams: [...hiddenWs], items: [...hiddenItems], clusters: [...hiddenCaps] };
+    },
+    // Resolve `name` to the hidden-set(s) it belongs to (a name can in principle
+    // match more than one kind; we act on every kind it matches).
+    _setsFor(name) {
+      const sets = [];
+      if (model.workstreams.some((w) => w.name === name)) sets.push(hiddenWs);
+      if (_findItem(model, name)) sets.push(hiddenItems);
+      if ((model.capacity || []).some((c) => c.name === name)) sets.push(hiddenCaps);
+      return sets;
+    },
+    _apply(names, action) {
+      const list = Array.isArray(names) ? names : (names == null ? [] : [names]);
+      const changed = [], unknown = [];
+      for (const name of list) {
+        const sets = this._setsFor(name);
+        if (!sets.length) { unknown.push(name); continue; }
+        for (const set of sets) {
+          const isHidden = set.has(name);
+          const hide = action === "toggle" ? !isHidden : action === "hide";
+          if (hide) set.add(name); else set.delete(name);
+        }
+        changed.push(name);
+      }
+      if (changed.length) { if (lastValidData) render(lastValidData); schedulePersist(); }
+      return { ok: true, changed, unknown, hidden: this.hidden() };
+    },
+    hide(names) { return this._apply(names, "hide"); },
+    show(names) { return this._apply(names, "show"); },
+    toggle(names) { return this._apply(names, "toggle"); },
+  },
   // ── plans (saved-plan management; each plan has its own model + history) ──
   // Lets a remote agent see and move between ALL saved plans, not just the active
   // one. Plans live in localStorage. list()/get() never switch the active plan;
@@ -4022,6 +4106,60 @@ window.plantt = {
       if (!opts || opts.open !== false) switchPlan(obj.uuid);
       return { ok: true, uuid: obj.uuid, name: obj.name };
     },
+  },
+  // ── history (per-plan undo TREE — not a linear stack) ──
+  // View any plan's history tree and navigate the ACTIVE plan's. tree()/get() read
+  // any saved plan without switching; jump()/undo()/redo() move the active plan (to
+  // navigate another plan, plans.open() it first). Node ids are stable within a plan.
+  history: {
+    // Compact tree of a plan's undo nodes (no snapshots). Active plan → live tree;
+    // any other saved plan → read from storage. null if the plan has no history yet.
+    tree(uuid) {
+      if (!uuid || (currentPlan && uuid === currentPlan.uuid)) return history ? exportHistory() : null;
+      const p = loadPlan(uuid);
+      if (!p) return null;
+      // A plan created/duplicated but never opened has no persisted tree yet → present
+      // its current model as a lone synthetic root so the plan is still viewable.
+      if (!p.history || !Array.isArray(p.history.nodes) || !p.history.nodes.length) {
+        return { rootId: 1, currentId: 1, synthetic: true, nodes: [{
+          id: 1, parentId: null, childIds: [], activeChild: null, summary: "Current state",
+          verb: "init", source: "init", ts: p.lastModified || null }] };
+      }
+      return {
+        rootId: p.history.rootId, currentId: p.history.currentId,
+        nodes: p.history.nodes.map((n) => ({
+          id: n.id, parentId: n.parentId, childIds: n.childIds, activeChild: n.activeChild,
+          summary: n.summary, hash: n.hash, detached: !!n.detached,
+          verb: n.change && n.change.verb, source: n.change && n.change.source, ts: n.ts,
+        })),
+      };
+    },
+    // The full plan model captured at a node — preview a point in history without
+    // navigating to it. Works for the active plan or any saved plan.
+    get(id, uuid) {
+      id = Number(id);
+      if (!uuid || (currentPlan && uuid === currentPlan.uuid)) {
+        const n = history && history.nodes.get(id);
+        return n ? clone(n.snapshot) : null;
+      }
+      const p = loadPlan(uuid);
+      if (!p) return null;
+      const nodes = (p.history && p.history.nodes) || [];
+      const n = nodes.find((x) => x.id === id);
+      if (n) return clone(n.snapshot);
+      // never-opened plan (synthetic root) → its only state is the saved model
+      return nodes.length ? null : clone(p.model);
+    },
+    // Move the ACTIVE plan to node `id` (like clicking a node in the History tree).
+    jump(id) {
+      id = Number(id);
+      if (!history) return { ok: false, error: "no history" };
+      if (!history.nodes.get(id)) return { ok: false, error: "no history node " + id };
+      jumpTo(id, "Jump");
+      return { ok: true, currentId: history.currentId };
+    },
+    undo() { if (!canUndo()) return { ok: false, error: "nothing to undo" }; undo(); return { ok: true, currentId: history.currentId }; },
+    redo() { if (!canRedo()) return { ok: false, error: "nothing to redo" }; redo(); return { ok: true, currentId: history.currentId }; },
   },
   // ── themes (local-only; follow the OS light/dark preference) ──
   themes: {
@@ -4239,6 +4377,10 @@ window.plantt = {
       case "get":           return { ok: true, data: P.get(cmd.name) };
       case "getDeps":       return { ok: true, data: P.getDeps(cmd.name) };
       case "getDependents": return { ok: true, data: P.getDependents(cmd.name) };
+      case "visibility.hidden": return { ok: true, data: P.visibility.hidden() };
+      case "visibility.hide":   return P.visibility.hide(cmd.names);
+      case "visibility.show":   return P.visibility.show(cmd.names);
+      case "visibility.toggle": return P.visibility.toggle(cmd.names);
       case "setModel":      return P.setModel(cmd.model, cmd.summary);
       case "apply":         return P.apply(cmd.ops, cmd.summary);
       case "plans.list":      return { ok: true, data: P.plans.list() };
@@ -4246,6 +4388,11 @@ window.plantt = {
       case "plans.open":      return P.plans.open(cmd.uuid);
       case "plans.duplicate": return P.plans.duplicate(cmd.uuid, cmd.name, { open: cmd.open !== false });
       case "plans.create":    return P.plans.create(cmd.name, cmd.model, { open: cmd.open !== false });
+      case "history.tree":    return { ok: true, data: P.history.tree(cmd.uuid) };
+      case "history.get":     return { ok: true, data: P.history.get(cmd.nodeId, cmd.uuid) };
+      case "history.jump":    return P.history.jump(cmd.nodeId);
+      case "history.undo":    return P.history.undo();
+      case "history.redo":    return P.history.redo();
       case "themes.list":     return { ok: true, data: P.themes.list() };
       case "themes.current":  return { ok: true, data: P.themes.current() };
       case "themes.get":      return { ok: true, data: P.themes.get(cmd.themeId) };

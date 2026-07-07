@@ -72,6 +72,34 @@ headers that let the page reach loopback (verified on Chrome 148).
    To duplicate plan A into a new plan stripped of milestones/clusters without leaving the active
    plan: `GET /plans/get?uuid=A` → strip locally → `POST /plans/create { name, model }`.
 
+   **History (undo TREE).** Every plan keeps a *branching* undo tree (not a linear stack). `tree`
+   and `get` read ANY saved plan without switching; `jump`/`undo`/`redo` move the ACTIVE plan (to
+   navigate a different plan, `POST /plans/open` it first). Use this to find and restore a past
+   state — e.g. recover a version the user undid, or snapshot a node into a new plan:
+   ```bash
+   curl -s http://127.0.0.1:8787/history                      # → { ok, tree:{ rootId, currentId, nodes:[{id,parentId,childIds,activeChild,summary,verb,ts}] } }
+   curl -s 'http://127.0.0.1:8787/history?uuid=<uuid>'        # tree of another saved plan (no switch)
+   curl -s 'http://127.0.0.1:8787/history/get?id=<n>'         # → { ok, model }  full plan model AT that node (preview, no navigate)
+   curl -s 'http://127.0.0.1:8787/history/get?id=<n>&uuid=<uuid>'   # a node of another plan
+   curl -s -X POST http://127.0.0.1:8787/history/jump -d '{ "id":<n> }'   # move active plan to node n (like clicking it in the tree)
+   curl -s -X POST http://127.0.0.1:8787/history/undo         # step to parent
+   curl -s -X POST http://127.0.0.1:8787/history/redo         # step to activeChild (the branch tip you last followed)
+   ```
+   `currentId` marks where the plan is now; `activeChild` is the linear redo target; a node with no
+   `childIds` is a leaf (branch tip). To checkpoint a node: `GET /history/get?id=n` → `POST
+   /plans/create { name, model }`. Navigating is non-destructive — it never deletes tree nodes.
+
+   **Hide / show (view-only).** Hide or show any activity, milestone, workstream or cluster **by
+   name** — a per-plan view preference that is NOT a model edit (not in the plan JSON, the shareable
+   URL, or undo). To delete for real, use the `remove*` ops instead. Accepts `{ names:[...] }` or a
+   single `{ name }`; a name matching more than one kind is hidden in each:
+   ```bash
+   curl -s http://127.0.0.1:8787/hidden                       # → { ok, hidden:{ workstreams, items, clusters } }
+   curl -s -X POST http://127.0.0.1:8787/hide   -d '{ "names":["Evals","256 H100"] }'
+   curl -s -X POST http://127.0.0.1:8787/show   -d '{ "name":"Evals" }'
+   curl -s -X POST http://127.0.0.1:8787/toggle -d '{ "names":["Post-training"] }'   # → { ok, changed, unknown, hidden }
+   ```
+
 5. **Apply the edit with `/apply`** — a batch of name-addressed ops applied atomically as ONE undo
    step. Don't read-modify-write the whole model unless you truly need to:
    ```bash
@@ -105,7 +133,7 @@ headers that let the page reach loopback (verified on Chrome 148).
 ```jsonc
 {
   "title": "string", "note": "string",
-  "annotations": [ { "text": "string", "date": "YYYY-MM-DD", "target": "<workstream name>|@compute", "edge": "top|bottom", "color": "#hex?", "icon": "string? (default ↓)" } ],
+  "annotations": [ { "text": "string", "date": "YYYY-MM-DD", "target": "<workstream name>|@compute|<task|milestone name>|<cluster name>", "edge": "top|bottom", "color": "#hex?", "icon": "string? (default ↓)" } ],
   "capacity":  [ {
       "name": "string", "chip": "H100|H200|B200|A100|v4p|v5e|v5p|v6e", "chips": 0,
       "flops": 0, // optional FLOP/s per chip; overrides the chip-type default
@@ -163,7 +191,7 @@ Capacity / compute (by name; tasks reference it via `cluster`):
 
 Annotations (dated band-edge markers; addressed by index into `annotations`) and plan fields:
 - `{op:"addAnnotation", annotation:{text,date,target,edge?,color?,icon?}}` · `{op:"updateAnnotation", index, set:{...}}` · `{op:"removeAnnotation", index}`
-  - `target` = a workstream name or `"@compute"`; `edge` = `"top"|"bottom"`. (Old `clusters[]` auto-migrate to `@compute` bottom annotations.)
+  - `target` = a workstream name, `"@compute"`, or any **activity / milestone / cluster name** (pins to that row or compute lane); `edge` = `"top"|"bottom"`. An unknown or hidden target is skipped at render. (Old `clusters[]` auto-migrate to `@compute` bottom annotations.)
 - `{op:"setPlan", set:{title?, note?}}`
 
 ## Themes (local-only)
