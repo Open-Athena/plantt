@@ -85,6 +85,7 @@ export const SCHEMA = {
     link: "url? — opens on bar click",
     tooltip: "markdown? — shown on hover",
     deps: "array? of item names — drawn as dependency arrows (red if violated)",
+    assigned: "string? — assignee name or @github-username (shows avatar when toggled on with @)",
   },
   milestone: {
     name: "string — unique across all tasks AND milestones",
@@ -93,6 +94,7 @@ export const SCHEMA = {
     line: "'#hex'? — draws a full-height vertical line in this color",
     tooltip: "markdown?",
     deps: "array? of item names",
+    assigned: "string? — assignee name or @github-username",
   },
   rules: [
     "workstreams is required and an array; each workstream needs a name and a tasks array (may be empty).",

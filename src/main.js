@@ -267,6 +267,7 @@ function computeLayout(data, containerWidth) {
         tooltip: t.tooltip || null,
         cluster: t.cluster || null,
         link: t.link || null,
+        assigned: t.assigned || null,
         barH: barH,
         x1: timeToX(t._start),
         x2: timeToX(t._end),
@@ -290,7 +291,7 @@ function computeLayout(data, containerWidth) {
         const x = timeToX(date);
         return {
           name: m.name, tooltip: m.tooltip || null, emoji: m.emoji || null,
-          line: m.line || null, x, date, mi,
+          line: m.line || null, assigned: m.assigned || null, x, date, mi,
           leftX: x - 8,                                   // marker extends left
           rightX: x + 12 + measureText(m.name, MS_LABEL_PX) // label extends right
         };
@@ -305,7 +306,7 @@ function computeLayout(data, containerWidth) {
       }
       for (const it of items) {
         milestoneLayouts.push({
-          name: it.name, tooltip: it.tooltip, emoji: it.emoji, line: it.line,
+          name: it.name, tooltip: it.tooltip, emoji: it.emoji, line: it.line, assigned: it.assigned,
           x: it.x, date: it.date, wsIndex: wi, msIndex: it.mi,
           y: y + it.lane * MILESTONE_ROW_HEIGHT + MILESTONE_ROW_HEIGHT / 2,
           rowY: y + it.lane * MILESTONE_ROW_HEIGHT,
@@ -471,6 +472,32 @@ function wrapText(str, fontSize, maxWidth) {
   }
   lines.push(cur);
   return lines;
+}
+
+// ─── Avatar rendering (SVG) ──────────────────────────────────────
+let _clipIdCounter = 0;
+function _renderAvatar(svg, username, x, y, size) {
+  const dataUrl = _avatarImgCache[username];
+  if (!dataUrl || dataUrl === "pending") return;
+  const clipId = "avatar-clip-" + (_clipIdCounter++);
+  const defs = document.createElementNS(SVG_NS, "defs");
+  const clipPath = document.createElementNS(SVG_NS, "clipPath");
+  clipPath.setAttribute("id", clipId);
+  const circle = document.createElementNS(SVG_NS, "circle");
+  circle.setAttribute("cx", String(x + size / 2));
+  circle.setAttribute("cy", String(y + size / 2));
+  circle.setAttribute("r", String(size / 2));
+  clipPath.appendChild(circle);
+  defs.appendChild(clipPath);
+  svg.appendChild(defs);
+  const img = document.createElementNS(SVG_NS, "image");
+  img.setAttribute("href", dataUrl);
+  img.setAttribute("x", String(x));
+  img.setAttribute("y", String(y));
+  img.setAttribute("width", String(size));
+  img.setAttribute("height", String(size));
+  img.setAttribute("clip-path", `url(#${clipId})`);
+  svg.appendChild(img);
 }
 
 // ─── Tooltip ─────────────────────────────────────────────────────
@@ -719,6 +746,13 @@ function renderSVG(data, layout) {
         }));
       }
 
+      // Assignee avatar — rendered before the label when showAssignees is on
+      const hasAvatar = showAssignees && t.assigned && t.assigned.startsWith("@");
+      const avatarSize = 12;
+      const avatarGap = 3;
+      const avatarSpace = hasAvatar ? (avatarSize + avatarGap) : 0;
+      if (hasAvatar) preloadAvatar(t.assigned.slice(1));
+
       // Label — sits left of the bar when it fits there; otherwise flips to the
       // right of the bar when that side has more room (avoids spilling off the
       // left edge for bars that start near the chart's left), else wraps left.
@@ -728,12 +762,12 @@ function renderSVG(data, layout) {
       const textW = measureText(t.name, fontSize);
       const spaceLeft = t.x1 - labelPad - layout.chartLeft;
       const spaceRight = layout.chartRight - (t.x2 + labelPad);
-      const flipRight = textW > spaceLeft && spaceRight > spaceLeft;
+      const flipRight = (textW + avatarSpace) > spaceLeft && spaceRight > spaceLeft;
 
       let clusterX = t.x2 + labelPad; // where the cluster annotation starts
       if (flipRight) {
-        const anchorX = t.x2 + labelPad;
-        const lines = textW > spaceRight ? wrapText(t.name, fontSize, Math.max(spaceRight, 40)) : [t.name];
+        const anchorX = t.x2 + labelPad + avatarSpace;
+        const lines = (textW > spaceRight - avatarSpace) ? wrapText(t.name, fontSize, Math.max(spaceRight - avatarSpace, 40)) : [t.name];
         const totalH = lines.length * lineHeight;
         const startY = t.y + 3.5 - (totalH - lineHeight) / 2;
         const txt = el("text", {
@@ -749,12 +783,13 @@ function renderSVG(data, layout) {
           widest = Math.max(widest, measureText(lines[li], fontSize));
         }
         svg.appendChild(txt);
+        if (hasAvatar) _renderAvatar(svg, t.assigned.slice(1), t.x2 + labelPad, t.y - avatarSize / 2, avatarSize);
         clusterX = anchorX + widest + 8; // push cluster annotation past the flipped label
       } else {
-        const anchorX = t.x1 - labelPad;
+        const anchorX = t.x1 - labelPad - avatarSpace;
         // Wrap to available space; allow overlapping the bar a bit (+20px grace)
-        const maxW = spaceLeft + 20;
-        const lines = textW > spaceLeft ? wrapText(t.name, fontSize, maxW) : [t.name];
+        const maxW = spaceLeft - avatarSpace + 20;
+        const lines = textW > (spaceLeft - avatarSpace) ? wrapText(t.name, fontSize, maxW) : [t.name];
         const totalH = lines.length * lineHeight;
         const startY = t.y + 3.5 - (totalH - lineHeight) / 2; // vertically center block on bar
         const txt = el("text", {
@@ -768,6 +803,7 @@ function renderSVG(data, layout) {
           txt.appendChild(tspan);
         }
         svg.appendChild(txt);
+        if (hasAvatar) _renderAvatar(svg, t.assigned.slice(1), t.x1 - labelPad - avatarSize, t.y - avatarSize / 2, avatarSize);
       }
 
       // Cluster annotation — small muted label to the right of the bar end
@@ -806,18 +842,26 @@ function renderSVG(data, layout) {
         }));
       }
 
+      // Milestone assignee avatar
+      const mHasAvatar = showAssignees && m.assigned && m.assigned.startsWith("@");
+      const mAvatarSize = 12, mAvatarGap = 3;
+      const mAvatarW = mHasAvatar ? (mAvatarSize + mAvatarGap) : 0;
+      if (mHasAvatar) preloadAvatar(m.assigned.slice(1));
+
       // Emoji milestone — render the glyph as the marker, with the name beside it
       if (m.emoji) {
         svg.appendChild(el("text", {
           x: m.x, y: m.y + 6,
           "font-size": "16", "text-anchor": "middle"
         }, m.emoji));
+        const emojiLabelX = m.x + 12 + mAvatarW;
+        if (mHasAvatar) _renderAvatar(svg, m.assigned.slice(1), m.x + 12, m.y - mAvatarSize / 2, mAvatarSize);
         svg.appendChild(el("text", {
-          x: m.x + 12, y: m.y + 3.5,
+          x: emojiLabelX, y: m.y + 3.5,
           "font-family": '"ET Book", Palatino, Georgia, serif',
           "font-size": "11", fill: LABEL, "font-style": "italic", "text-anchor": "start"
         }, m.name));
-        addMilestoneHandles(svg, m, 22 + measureText(m.name, 11) + 6);
+        addMilestoneHandles(svg, m, 22 + mAvatarW + measureText(m.name, 11) + 6);
         continue;
       }
 
@@ -825,7 +869,8 @@ function renderSVG(data, layout) {
       svg.appendChild(el("path", {
         d: diamond, fill: TEXT, stroke: "none"
       }));
-      const mLabelX = m.x + size + 5;
+      const mLabelX = m.x + size + 5 + mAvatarW;
+      if (mHasAvatar) _renderAvatar(svg, m.assigned.slice(1), m.x + size + 5, m.y - mAvatarSize / 2, mAvatarSize);
       const mFontSize = 11;
       const mLineHeight = 13;
       const mTextW = measureText(m.name, mFontSize);
@@ -960,12 +1005,14 @@ function renderSVG(data, layout) {
   const disp = (crosshair.visible && !dragState) ? "inline" : "none"; // yield to the drag guide
   chLine = el("line", {
     x1: cx0, y1: chy1, x2: cx0, y2: chy2, stroke: RULE,
-    "stroke-width": "0.75", "stroke-dasharray": "2,3", opacity: "0.8", display: disp
+    "stroke-width": "0.75", "stroke-dasharray": "2,3", opacity: "0.8", display: disp,
+    "pointer-events": "none"
   });
-  chBg = el("rect", { x: cx0 - 34, y: layout.axisY + 18, width: 68, height: 15, fill: BACKGROUND, opacity: "0.9", display: disp });
+  chBg = el("rect", { x: cx0 - 34, y: layout.axisY + 18, width: 68, height: 15, fill: BACKGROUND, opacity: "0.9", display: disp, "pointer-events": "none" });
   chText = el("text", {
     x: cx0, y: layout.axisY + 29, "text-anchor": "middle",
-    "font-family": '"SF Mono", Menlo, monospace', "font-size": "10", fill: HEADING, display: disp
+    "font-family": '"SF Mono", Menlo, monospace', "font-size": "10", fill: HEADING, display: disp,
+    "pointer-events": "none"
   }, crosshair.visible ? fmtShort(xToTime(layout, cx0)) : "");
   svg.appendChild(chLine);
   svg.appendChild(chBg);
@@ -1055,8 +1102,38 @@ let hiddenWs = new Set();
 let hiddenItems = new Set(); // hidden tasks/milestones (by name) — view-state, like hiddenWs
 let hiddenCaps = new Set();  // hidden capacity pools (by name) — view-state
 let showCapacity = true;
-let depsMode = "all"; // dependency display: "all" | "violations" (red only) | "off" (reveal on hover)
+let depsMode = "off"; // dependency display: "all" | "violations" (red only) | "off" (reveal on hover)
 const DEPS_LABEL = { all: "all", violations: "red only", off: "off" };
+let showAssignees = false; // toggle with @
+
+// GitHub avatar cache: { username: { url, ts } }
+const AVATAR_CACHE_KEY = "plantt_gh_avatars";
+function _loadAvatarCache() { try { return JSON.parse(localStorage.getItem(AVATAR_CACHE_KEY)) || {}; } catch { return {}; } }
+function _saveAvatarCache(c) { try { localStorage.setItem(AVATAR_CACHE_KEY, JSON.stringify(c)); } catch {} }
+const _avatarImgCache = {}; // in-memory: username → loaded Image (or null if pending)
+function getGitHubAvatarUrl(username) {
+  const c = _loadAvatarCache();
+  const entry = c[username];
+  if (entry && Date.now() - entry.ts < 7 * 24 * 3600 * 1000) return entry.url;
+  const url = `https://avatars.githubusercontent.com/${encodeURIComponent(username)}?s=32`;
+  c[username] = { url, ts: Date.now() };
+  _saveAvatarCache(c);
+  return url;
+}
+function preloadAvatar(username) {
+  if (_avatarImgCache[username]) return;
+  _avatarImgCache[username] = "pending";
+  const img = new Image();
+  img.crossOrigin = "anonymous";
+  img.onload = () => {
+    const canvas = document.createElement("canvas");
+    canvas.width = img.width; canvas.height = img.height;
+    canvas.getContext("2d").drawImage(img, 0, 0);
+    try { _avatarImgCache[username] = canvas.toDataURL("image/png"); if (lastValidData) render(lastValidData); } catch { _avatarImgCache[username] = null; }
+  };
+  img.onerror = () => { _avatarImgCache[username] = null; };
+  img.src = getGitHubAvatarUrl(username);
+}
 
 function render(data) {
   hideTooltip();
@@ -1527,8 +1604,8 @@ function buildDragChange(ds) {
   return { source: "drag", verb: "move", targetType: "task", targetName: name, details: { deltaDays: delta, affectedCount: affected } };
 }
 
-const TASK_FIELDS = ["start", "end", "significance", "cluster", "chips", "link", "tooltip", "deps"];
-const MS_FIELDS = ["date", "emoji", "line", "tooltip", "deps"];
+const TASK_FIELDS = ["start", "end", "significance", "cluster", "chips", "link", "tooltip", "deps", "assigned"];
+const MS_FIELDS = ["date", "emoji", "line", "tooltip", "deps", "assigned"];
 function changedFields(a, b, keys) {
   const out = [];
   for (const k of keys) if (!sameJSON(a ? a[k] : undefined, b ? b[k] : undefined)) out.push(k);
@@ -1829,7 +1906,7 @@ function persistPlan() {
     uuid: currentPlan.uuid, name: currentPlan.name, note: currentPlan.note || "",
     createdAt: currentPlan.createdAt, lastModified: currentPlan.lastModified,
     today: showTodayLine, compact: compactMode, hidden: [...hiddenWs],
-    hiddenItems: [...hiddenItems], hiddenCaps: [...hiddenCaps], showCapacity, depsMode,
+    hiddenItems: [...hiddenItems], hiddenCaps: [...hiddenCaps], showCapacity, depsMode, showAssignees,
     focus: { on: focusOn, from: focusFrom, to: focusTo },
     model, history: serializeHistory(),
   });
@@ -1858,7 +1935,8 @@ function adoptPlan(p) {
   hiddenItems = new Set(Array.isArray(p.hiddenItems) ? p.hiddenItems : []);
   hiddenCaps = new Set(Array.isArray(p.hiddenCaps) ? p.hiddenCaps : []);
   showCapacity = (typeof p.showCapacity === "boolean") ? p.showCapacity : true;
-  depsMode = (typeof p.depsMode === "string") ? p.depsMode : (p.showDeps === false ? "off" : "all"); // migrate old boolean
+  depsMode = (typeof p.depsMode === "string") ? p.depsMode : (p.showDeps === false ? "off" : "off"); // migrate old boolean; default off
+  showAssignees = !!p.showAssignees;
   const f = p.focus || {};
   focusOn = !!f.on; focusFrom = f.from || ""; focusTo = f.to || "";
 }
@@ -2233,6 +2311,7 @@ function openHelpModal() {
     row(k("Ctrl") + k("⇧") + k("C"), "toggle compact (8.5″ page)"),
     row(k("/"), "show / hide plan sections"),
     row(k("d"), "cycle dependency display"),
+    row(k("@"), "toggle assignee avatars"),
   ].join("");
   const drag = [
     row("drag bar", "Move the activity (and everything chained to it)"),
@@ -2710,7 +2789,7 @@ function clearCapHover() { if (hoverHL) { hoverHL = null; renderHighlights(); } 
 
 // \u2500\u2500\u2500 SVG interaction handles \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 function addTaskHandles(svg, t) {
-  const hitH = Math.max(t.barH, 14);
+  const hitH = Math.max(t.barH, 20);
   const yTop = t.y - hitH / 2;
   const x1 = t.x1, x2 = Math.max(t.x2, t.x1 + 2), w = x2 - x1;
   const id = { name: t.name, wsIndex: t.wsIndex, taskIndex: t.taskIndex, link: t.link, tooltip: t.tooltip };
@@ -2963,6 +3042,7 @@ function openTaskModal(wsIndex, taskIndex) {
     field("Cluster", `<select id="m-cluster">${clusterOpts}</select>`) +
     field("Chips", `<input id="m-chips" type="number" min="1" ${maxChips ? `max="${maxChips}"` : ""} value="${esc(chipsVal)}"> <span style="font-size:11px;color:#888">max ${maxChips || "?"}${remChips != null ? ` · ${remChips} free at start` : ""}</span>`) +
     depsField() +
+    field("Assigned to", `<input id="m-assigned" type="text" placeholder="name or @github" value="${esc(t.assigned || "")}">`) +
     field("Link", `<input id="m-link" type="url" value="${esc(t.link || "")}">`) +
     field("Tooltip (markdown)", `<textarea id="m-tip" rows="8">${esc(t.tooltip || "")}</textarea>`) +
     `<div class="modal-del-row"><span></span><button type="button" id="m-delete" class="modal-del">Delete activity</button></div>`;
@@ -2979,6 +3059,7 @@ function openTaskModal(wsIndex, taskIndex) {
     if (g("m-sig").value !== "") nt.significance = +g("m-sig").value;
     if (g("m-cluster").value) nt.cluster = g("m-cluster").value;
     if (g("m-chips").value !== "") nt.chips = +g("m-chips").value;
+    if (g("m-assigned").value.trim()) nt.assigned = g("m-assigned").value.trim();
     if (g("m-link").value.trim()) nt.link = g("m-link").value.trim();
     if (g("m-tip").value) nt.tooltip = g("m-tip").value;
     const deps = getDeps();
@@ -3046,6 +3127,7 @@ function openMilestoneModal(wsIndex, msIndex) {
     field("Date", `<input id="m-date" type="date" value="${esc(m.date)}">`) +
     field("Emoji", `<input id="m-emoji" type="text" value="${esc(m.emoji || "")}" style="width:4em">`) +
     field("Marker line", `<input id="m-line" type="text" placeholder="#c0392b or empty" value="${esc(m.line || "")}">`) +
+    field("Assigned to", `<input id="m-assigned" type="text" placeholder="name or @github" value="${esc(m.assigned || "")}">`) +
     depsField() +
     field("Tooltip (markdown)", `<textarea id="m-tip" rows="8">${esc(m.tooltip || "")}</textarea>`) +
     `<div class="modal-del-row"><span></span><button type="button" id="m-delete" class="modal-del">Delete milestone</button></div>`;
@@ -3055,6 +3137,7 @@ function openMilestoneModal(wsIndex, msIndex) {
     const nm = { name: g("m-name").value.trim() || m.name, date: g("m-date").value };
     if (g("m-emoji").value.trim()) nm.emoji = g("m-emoji").value.trim();
     if (g("m-line").value.trim()) nm.line = g("m-line").value.trim();
+    if (g("m-assigned").value.trim()) nm.assigned = g("m-assigned").value.trim();
     if (g("m-tip").value) nm.tooltip = g("m-tip").value;
     const deps = getDeps();
     if (deps.length) nm.deps = deps;
@@ -3707,6 +3790,14 @@ document.addEventListener("keydown", function (e) {
     cycleDeps();
     return;
   }
+  // @ → toggle assignee avatars
+  if (e.key === "@" && !typing && !document.getElementById("modal-overlay")) {
+    e.preventDefault();
+    showAssignees = !showAssignees;
+    schedulePersist();
+    if (lastValidData) render(lastValidData);
+    return;
+  }
   // Ctrl+Y → history visualizer (note: this deliberately overrides Windows' redo)
   if (e.ctrlKey && !e.metaKey && (e.key === "y" || e.key === "Y")) { e.preventDefault(); openHistoryViz(); return; }
   // Ctrl+O → plans manager
@@ -3994,8 +4085,8 @@ window.plantt = {
       title: model.title, name: currentPlan ? currentPlan.name : null,
       workstreams: model.workstreams.map((ws) => ({
         name: ws.name,
-        tasks: ws.tasks.map((t) => ({ name: t.name, start: t.start, end: t.end, cluster: t.cluster, deps: t.deps || [] })),
-        milestones: (ws.milestones || []).map((m) => ({ name: m.name, date: m.date, emoji: m.emoji, deps: m.deps || [] })),
+        tasks: ws.tasks.map((t) => ({ name: t.name, start: t.start, end: t.end, cluster: t.cluster, assigned: t.assigned, deps: t.deps || [] })),
+        milestones: (ws.milestones || []).map((m) => ({ name: m.name, date: m.date, emoji: m.emoji, assigned: m.assigned, deps: m.deps || [] })),
       })),
       capacity: (model.capacity || []).map((c) => ({ name: c.name, chip: c.chip, chips: c.chips, from: c.from, to: c.to })),
       annotations: (model.annotations || []).map((a, i) => ({ index: i, text: a.text, date: a.date, target: a.target, edge: a.edge || "bottom" })),
