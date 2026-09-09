@@ -504,8 +504,19 @@ function _renderAvatar(svg, username, x, y, size) {
 const tooltipEl = document.getElementById("tooltip");
 let tooltipVisible = false;
 
-function showTooltip(md, evt) {
-  tooltipEl.innerHTML = marked.parse(md);
+function showTooltip(md, evt, assigned) {
+  let html = "";
+  if (assigned) {
+    const isGh = assigned.startsWith("@");
+    const username = isGh ? assigned.slice(1) : null;
+    const dataUrl = username && _avatarImgCache[username];
+    const avatarHtml = (dataUrl && dataUrl !== "pending")
+      ? `<img src="${dataUrl}" style="width:18px;height:18px;border-radius:50%;vertical-align:middle;margin-right:5px">`
+      : "";
+    html += `<div style="font-size:11px;color:var(--muted);margin-bottom:6px;display:flex;align-items:center">${avatarHtml}<span>${esc(assigned)}</span></div>`;
+  }
+  html += marked.parse(md);
+  tooltipEl.innerHTML = html;
   tooltipEl.classList.add("visible");
   tooltipVisible = true;
   positionTooltip(evt);
@@ -1104,7 +1115,7 @@ let hiddenCaps = new Set();  // hidden capacity pools (by name) — view-state
 let showCapacity = true;
 let depsMode = "off"; // dependency display: "all" | "violations" (red only) | "off" (reveal on hover)
 const DEPS_LABEL = { all: "all", violations: "red only", off: "off" };
-let showAssignees = false; // toggle with @
+let showAssignees = true; // toggle with @
 
 // GitHub avatar cache: { username: { url, ts } }
 const AVATAR_CACHE_KEY = "plantt_gh_avatars";
@@ -1936,7 +1947,7 @@ function adoptPlan(p) {
   hiddenCaps = new Set(Array.isArray(p.hiddenCaps) ? p.hiddenCaps : []);
   showCapacity = (typeof p.showCapacity === "boolean") ? p.showCapacity : true;
   depsMode = (typeof p.depsMode === "string") ? p.depsMode : (p.showDeps === false ? "off" : "off"); // migrate old boolean; default off
-  showAssignees = !!p.showAssignees;
+  showAssignees = p.showAssignees !== false;
   const f = p.focus || {};
   focusOn = !!f.on; focusFrom = f.from || ""; focusTo = f.to || "";
 }
@@ -2808,7 +2819,7 @@ function addTaskHandles(svg, t) {
     renderHighlights();
   };
   const body = el("rect", { x: x1, y: yTop, width: w, height: hitH, fill: "transparent", cursor: "grab" });
-  attachItemEvents(body, t.tooltip, e => beginDrag("task-body", id, e), () => openTaskModal(t.wsIndex, t.taskIndex));
+  attachItemEvents(body, t.tooltip, e => beginDrag("task-body", id, e), () => openTaskModal(t.wsIndex, t.taskIndex), t.assigned);
   body.addEventListener("mouseenter", hoverOn);
   body.addEventListener("mouseleave", hoverOff);
   svg.appendChild(body);
@@ -2826,7 +2837,7 @@ function addTaskHandles(svg, t) {
 function addMilestoneHandles(svg, m, hitW) {
   const rect = el("rect", { x: m.x - 9, y: m.y - 10, width: Math.max(hitW, 18), height: 20, fill: "transparent", cursor: "grab" });
   attachItemEvents(rect, m.tooltip, e => beginDrag("milestone", { wsIndex: m.wsIndex, msIndex: m.msIndex }, e),
-    () => openMilestoneModal(m.wsIndex, m.msIndex));
+    () => openMilestoneModal(m.wsIndex, m.msIndex), m.assigned);
   rect.addEventListener("mouseenter", () => {
     setDepHover(m.name);
     dateHover = { kind: "milestone", x: m.x, y: m.y, date: m.date };
@@ -2840,11 +2851,11 @@ function addMilestoneHandles(svg, m, hitW) {
   svg.appendChild(rect);
 }
 // Shared wiring: hover tooltip, pointerdown\u2192drag, dblclick\u2192modal
-function attachItemEvents(rect, tooltip, onDown, onDbl) {
+function attachItemEvents(rect, tooltip, onDown, onDbl, assigned) {
   rect.addEventListener("pointerdown", e => onDown(e));
   rect.addEventListener("dblclick", e => { e.preventDefault(); onDbl(); });
-  if (tooltip) {
-    rect.addEventListener("mouseenter", e => showTooltip(tooltip, e));
+  if (tooltip || assigned) {
+    rect.addEventListener("mouseenter", e => showTooltip(tooltip || "", e, assigned));
     rect.addEventListener("mousemove", e => { if (tooltipVisible) positionTooltip(e); });
     rect.addEventListener("mouseleave", hideTooltip);
   }
@@ -2868,8 +2879,13 @@ function modalKeydown(e) {
     else modalEl._depsArrow && modalEl._depsArrow(e.key === "ArrowDown" ? 1 : -1);
     return;
   }
+  // Assignee autocomplete owns Enter/Escape/Arrows while its menu is open.
+  if (e.target.id === "m-assigned" && modalEl._assigneeMenu) {
+    if (modalEl._assigneeMenu(e.key)) { e.preventDefault(); return; }
+  }
   if (e.key === "Escape") {
     if (inDeps && modalEl._depsCloseMenu && modalEl._depsCloseMenu()) { e.preventDefault(); return; }
+    if (e.target.id === "m-assigned" && modalEl._assigneeCloseMenu && modalEl._assigneeCloseMenu()) { e.preventDefault(); return; }
     e.preventDefault(); closeModal();
   }
   else if (e.key === "Enter" && e.target.tagName !== "TEXTAREA") { e.preventDefault(); modalEl._save(); }
@@ -2986,6 +3002,64 @@ function wireDepsPicker(selfName, initialDeps) {
   return () => selected.slice();
 }
 
+// Wire assignee autocomplete on #m-assigned. Suggests existing assignees from the plan.
+function wireAssigneeAutocomplete() {
+  const inputEl = modalEl.querySelector("#m-assigned");
+  if (!inputEl) return;
+  const wrap = document.createElement("div");
+  wrap.className = "deps-input-wrap";
+  inputEl.parentNode.insertBefore(wrap, inputEl);
+  wrap.appendChild(inputEl);
+  const menuEl = document.createElement("div");
+  menuEl.className = "deps-menu";
+  wrap.appendChild(menuEl);
+
+  const allAssigned = new Set();
+  for (const it of _allItems(model)) if (it.assigned) allAssigned.add(it.assigned);
+  const pool = [...allAssigned].sort();
+  let matches = [], active = -1;
+
+  function renderMenu() {
+    const q = inputEl.value.trim().toLowerCase();
+    matches = q
+      ? pool.filter(n => n.toLowerCase().includes(q)).sort((a, b) => {
+          const ai = a.toLowerCase().indexOf(q), bi = b.toLowerCase().indexOf(q);
+          return ai - bi || a.localeCompare(b);
+        }).slice(0, 8)
+      : pool.slice(0, 8);
+    if (active >= matches.length) active = matches.length - 1;
+    if (!matches.length) { menuEl.innerHTML = ""; menuEl.classList.remove("open"); return; }
+    menuEl.innerHTML = matches.map((n, i) => {
+      const isGh = n.startsWith("@");
+      const username = isGh ? n.slice(1) : null;
+      const dataUrl = username && _avatarImgCache[username];
+      const avatarHtml = (dataUrl && dataUrl !== "pending")
+        ? `<img src="${dataUrl}" style="width:16px;height:16px;border-radius:50%;vertical-align:middle;margin-right:5px">`
+        : "";
+      return `<div class="deps-opt${i === active ? " active" : ""}" data-i="${i}">${avatarHtml}${esc(n)}</div>`;
+    }).join("");
+    menuEl.classList.add("open");
+    menuEl.querySelectorAll(".deps-opt").forEach(o =>
+      o.addEventListener("mousedown", e => { e.preventDefault(); inputEl.value = matches[+o.getAttribute("data-i")]; menuEl.classList.remove("open"); }));
+  }
+
+  inputEl.addEventListener("input", () => { active = 0; renderMenu(); });
+  inputEl.addEventListener("focus", () => { active = -1; renderMenu(); });
+  inputEl.addEventListener("blur", () => setTimeout(() => menuEl.classList.remove("open"), 120));
+
+  modalEl._assigneeMenu = (key) => {
+    if (!menuEl.classList.contains("open") || !matches.length) return false;
+    if (key === "ArrowDown") { active = (active + 1) % matches.length; renderMenu(); return true; }
+    if (key === "ArrowUp") { active = (active - 1 + matches.length) % matches.length; renderMenu(); return true; }
+    if (key === "Enter" && active >= 0 && matches[active]) { inputEl.value = matches[active]; menuEl.classList.remove("open"); return true; }
+    return false;
+  };
+  modalEl._assigneeCloseMenu = () => {
+    if (menuEl.classList.contains("open")) { menuEl.classList.remove("open"); return true; }
+    return false;
+  };
+}
+
 // Free chips on this task's cluster at its start (capacity minus what other
 // activities are using then) — the default allocation in the modal
 function remainingChips(wsIndex, taskIndex) {
@@ -3096,6 +3170,7 @@ function openTaskModal(wsIndex, taskIndex) {
     commitModel(); closeModal();
   });
   getDeps = wireDepsPicker(oldName, t.deps);
+  wireAssigneeAutocomplete();
   modalEl.querySelector("#m-delete").addEventListener("click", () => deleteTask(wsIndex, taskIndex));
 }
 
@@ -3155,6 +3230,7 @@ function openMilestoneModal(wsIndex, msIndex) {
     commitModel(); closeModal();
   });
   getDeps = wireDepsPicker(m.name, m.deps);
+  wireAssigneeAutocomplete();
   modalEl.querySelector("#m-delete").addEventListener("click", () => {
     const gone = model.workstreams[wsIndex].milestones[msIndex].name;
     model.workstreams[wsIndex].milestones.splice(msIndex, 1);
