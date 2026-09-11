@@ -89,7 +89,10 @@ export const SCHEMA = {
   },
   milestone: {
     name: "string — unique across all tasks AND milestones",
-    date: "'YYYY-MM-DD'",
+    date: "'YYYY-MM-DD' — fallback date (always present for backwards compat)",
+    start:
+      "optional — same forms as task start: '<taskName>' | ['date','YYYY-MM-DD'] | " +
+      "['after','<taskName>',['days',N]]. When present, overrides date for positioning.",
     emoji: "string? — shown instead of the diamond marker",
     line: "'#hex'? — draws a full-height vertical line in this color",
     tooltip: "markdown?",

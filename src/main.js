@@ -179,6 +179,26 @@ function resolveSpans(data) {
   }
 
   for (const name of Object.keys(taskMap)) resolve(name);
+
+  // Milestones: resolve `start` (same DSL as tasks) into _resolvedDate when present.
+  for (const ws of data.workstreams) {
+    if (!ws.milestones) continue;
+    for (const m of ws.milestones) {
+      if (m.start == null) continue;
+      if (typeof m.start === "string" && taskMap[m.start]) {
+        resolve(m.start);
+        m._resolvedDate = new Date(taskMap[m.start]._end);
+      } else if (Array.isArray(m.start) && m.start[0] === "date") {
+        m._resolvedDate = parseDate(m.start[1]);
+      } else if (Array.isArray(m.start) && m.start[0] === "after") {
+        const pred = m.start[1];
+        if (taskMap[pred]) {
+          resolve(pred);
+          m._resolvedDate = addDuration(taskMap[pred]._end, m.start[2] || ["days", 0]);
+        }
+      }
+    }
+  }
 }
 
 // ─── Layout ──────────────────────────────────────────────────────
@@ -211,7 +231,7 @@ function computeLayout(data, containerWidth) {
     if (ws.milestones) {
       for (const m of ws.milestones) {
         if (hiddenItems.has(m.name)) continue;
-        const md = parseDate(m.date);
+        const md = m._resolvedDate || parseDate(m.date);
         if (+md < minDate) minDate = +md;
         if (+md > maxDate) maxDate = +md;
       }
@@ -287,7 +307,7 @@ function computeLayout(data, containerWidth) {
     if (ws.milestones && ws.milestones.length) {
       const MS_LABEL_PX = 11, MS_GAP = 12;
       const items = ws.milestones.map((m, mi) => {
-        const date = parseDate(m.date);
+        const date = m._resolvedDate || parseDate(m.date);
         const x = timeToX(date);
         return {
           name: m.name, tooltip: m.tooltip || null, emoji: m.emoji || null,
@@ -663,6 +683,9 @@ function renderSVG(data, layout) {
       }, labelStr);
       t.addEventListener("pointerdown", (e) => beginAnnDrag(ai, e)); // drag L/R to change the date
       t.addEventListener("dblclick", (e) => { e.preventDefault(); openAnnotationModal(ai); });
+      t.addEventListener("mouseenter", (e) => showTooltip(fmtShort(cd), e));
+      t.addEventListener("mousemove", (e) => { if (tooltipVisible) positionTooltip(e); });
+      t.addEventListener("mouseleave", hideTooltip);
       svg.appendChild(t);
     });
   }
@@ -2701,7 +2724,18 @@ function applyDrag(kind, id, deltaDays, shift) {
   if (deltaDays === 0) return;
   if (kind === "milestone") {
     const ms = model.workstreams[id.wsIndex].milestones[id.msIndex];
-    ms.date = fmtDate(new Date(+parseDate(ms.date) + deltaDays * DAY_MS));
+    if (ms.start != null) {
+      if (Array.isArray(ms.start) && ms.start[0] === "date") {
+        ms.start = shiftDateSpec(ms.start, deltaDays);
+      } else {
+        // chained/after start — convert to absolute date on drag
+        const resolved = ms._resolvedDate || parseDate(ms.date);
+        ms.start = ["date", fmtDate(new Date(+resolved + deltaDays * DAY_MS))];
+      }
+      delete ms.date;
+    } else {
+      ms.date = fmtDate(new Date(+parseDate(ms.date) + deltaDays * DAY_MS));
+    }
     return;
   }
   const t = modelTaskByName(id.name);
@@ -3187,6 +3221,8 @@ function deleteTask(wsIndex, taskIndex) {
   };
   for (const x of modelTasks())
     if (x.name !== gone && startParent(x) === gone) x.start = ["date", resolvedStart(x.name)];
+  for (const ws of model.workstreams) if (ws.milestones) for (const ms of ws.milestones)
+    if (ms.start != null && startParent(ms) === gone) { ms.date = ms._resolvedDate ? isoLocal(ms._resolvedDate) : ms.date; delete ms.start; }
   model.workstreams[wsIndex].tasks.splice(taskIndex, 1);
   for (const it of _allItems(model))
     if (Array.isArray(it.deps) && it.deps.includes(gone)) it.deps = it.deps.filter((d) => d !== gone);
@@ -3197,9 +3233,20 @@ function deleteTask(wsIndex, taskIndex) {
 function openMilestoneModal(wsIndex, msIndex) {
   const m = model.workstreams[wsIndex].milestones[msIndex];
   const oldMs = clone(m);
+  const msIsAfter = m.start != null && (typeof m.start === "string" || (Array.isArray(m.start) && m.start[0] === "after"));
+  const msStartDateVal = m.start != null
+    ? (Array.isArray(m.start) && m.start[0] === "date" ? m.start[1] : "")
+    : (m.date || "");
+  const msAfterName = m.start != null ? startParent(m) || "" : "";
+  const msTaskOpts = modelTasks().map(x => `<option ${x.name === msAfterName ? "selected" : ""}>${esc(x.name)}</option>`).join("");
   const body =
     field("Name", `<input id="m-name" type="text" value="${esc(m.name)}">`) +
-    field("Date", `<input id="m-date" type="date" value="${esc(m.date)}">`) +
+    `<fieldset class="modal-group"><legend>Date</legend>
+       <label class="modal-radio"><input type="radio" name="m-startkind" id="m-sk-date" ${msIsAfter ? "" : "checked"}> On date
+         <input id="m-date" type="date" value="${esc(msStartDateVal)}"></label>
+       <label class="modal-radio"><input type="radio" name="m-startkind" id="m-sk-after" ${msIsAfter ? "checked" : ""}> After
+         <select id="m-after">${msTaskOpts}</select> + <input id="m-lag" type="number" value="${m.start != null ? startLag(m) : 0}" style="width:4em"> days lag</label>
+     </fieldset>` +
     field("Emoji", `<input id="m-emoji" type="text" value="${esc(m.emoji || "")}" style="width:4em">`) +
     field("Marker line", `<input id="m-line" type="text" placeholder="#c0392b or empty" value="${esc(m.line || "")}">`) +
     field("Assigned to", `<input id="m-assigned" type="text" placeholder="name or @github" value="${esc(m.assigned || "")}">`) +
@@ -3209,7 +3256,15 @@ function openMilestoneModal(wsIndex, msIndex) {
   let getDeps = () => (m.deps || []).slice();
   openModalShell("Edit milestone", body, () => {
     const g = id => modalEl.querySelector("#" + id);
-    const nm = { name: g("m-name").value.trim() || m.name, date: g("m-date").value };
+    const nm = { name: g("m-name").value.trim() || m.name };
+    if (g("m-sk-after").checked) {
+      const after = g("m-after").value;
+      const lag = parseInt(g("m-lag").value, 10) || 0;
+      nm.start = lag ? ["after", after, ["days", lag]] : after;
+      nm.date = m.date || isoLocal(new Date());
+    } else {
+      nm.date = g("m-date").value;
+    }
     if (g("m-emoji").value.trim()) nm.emoji = g("m-emoji").value.trim();
     if (g("m-line").value.trim()) nm.line = g("m-line").value.trim();
     if (g("m-assigned").value.trim()) nm.assigned = g("m-assigned").value.trim();
