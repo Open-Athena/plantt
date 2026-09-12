@@ -18,6 +18,7 @@ op vocabulary and relay contract rules there still hold.
 | Fork provenance | Exact source node, linked. Shown as "private" when the viewer cannot read the source plan. |
 | Hashes | Tree identity keeps the existing 64-bit `cyrb53(canonicalJSON + parentHash)`. Snapshot blobs are keyed by SHA-256 server-side. |
 | Non-member share links (minted tokens) | Later. Not in this branch. |
+| Status (2026-09-12) | Phases 1–3 implemented on the `multiuser` branch and deployed; phase 4 open. |
 
 ## Sharing model
 
@@ -58,8 +59,8 @@ plans        (id TEXT PK /* uuid */, name, owner_login, created_at, updated_at, 
               forked_from_plan, forked_from_hash, archived_at, deleted_at,
               search_text /* name + workstream + task names of head, refreshed on head move */,
               view_prefs_json /* owner's today/compact/hidden toggles; per-user later */)
-plan_nodes   (plan_id, hash, parent_hash, summary, change_json, author_login, ts, active_child_hash,
-              detached, PRIMARY KEY(plan_id, hash))
+plan_nodes   (plan_id, hash, parent_hash, sha256 -> blobs, summary, change_json, author_login, ts,
+              active_child_hash, detached, PRIMARY KEY(plan_id, hash))
 blobs        (sha256 PK, body TEXT, bytes)                       -- snapshots, shared across plans
 plan_acl     (plan_id, login, level, granted_by, granted_at, PRIMARY KEY(plan_id, login))
 plan_events  (id, ts, actor_login, plan_id, action, node_hash, detail_json, ip_hash)

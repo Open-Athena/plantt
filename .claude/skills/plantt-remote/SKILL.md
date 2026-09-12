@@ -59,7 +59,9 @@ headers that let the page reach loopback (verified on Chrome 148).
    ```
 
    All of the above target the **active** plan. To work across **all saved plans** (the tab can hold
-   many; only one is active at a time), use the `/plans*` endpoints — `list`/`get` read any plan
+   many; only one is active at a time), use the `/plans*` endpoints. When the tab is **signed in**,
+   these answer from the server (the user's synced plans, with `owner`/`level`/`visibility`), and
+   `duplicate` is a server-side fork; the verbs and shapes are otherwise identical — `list`/`get` read any plan
    without switching; `open`/`duplicate`/`create` change which plan is active (same as clicking in
    the UI). This is how you read or copy a plan the user doesn't currently have open:
    ```bash
