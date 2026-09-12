@@ -1,6 +1,7 @@
 // Anti-drift test for the plan data model. Pure Node (no browser): imports the
-// single-source schema module and cross-checks it against main.js. Run: `npm test`.
+// single-source schema module and cross-checks it against src/ops.js. Run: `npm test`.
 import { validate, SCHEMA, OPS, EXAMPLE } from "../src/schema.js";
+import { _applyOp } from "../src/ops.js";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -26,20 +27,31 @@ ok("accepts a workstream with empty tasks", !throws(() => validate({
 })));
 
 // 3) The op vocabulary in OPS must EXACTLY match the cases _applyOp() handles.
-const src = readFileSync(join(ROOT, "src/main.js"), "utf8");
+const src = readFileSync(join(ROOT, "src/ops.js"), "utf8");
 const fnStart = src.indexOf("function _applyOp(m, op)");
 const fnEnd = src.indexOf("function _summarizeOps", fnStart);
-if (fnStart < 0 || fnEnd < 0) { ok("located _applyOp in main.js", false); }
+if (fnStart < 0 || fnEnd < 0) { ok("located _applyOp in ops.js", false); }
 else {
   const body = src.slice(fnStart, fnEnd);
   const handled = new Set([...body.matchAll(/case\s+"([^"]+)":/g)].map((m) => m[1]));
   const documented = new Set(Object.keys(OPS));
   const undocumented = [...handled].filter((x) => !documented.has(x));
   const unhandled = [...documented].filter((x) => !handled.has(x));
-  ok("located _applyOp in main.js", true);
+  ok("located _applyOp in ops.js", true);
   ok("every handled op is documented in OPS", undocumented.length === 0, undocumented.length ? "missing from OPS: " + undocumented.join(", ") : "");
   ok("every documented op is handled by _applyOp", unhandled.length === 0, unhandled.length ? "missing from _applyOp: " + unhandled.join(", ") : "");
   ok("op count matches", handled.size === documented.size, `_applyOp=${handled.size} OPS=${documented.size}`);
+}
+
+// 3b) ops.js is pure: importable in Node, and an op really mutates a model that still validates.
+{
+  const m = structuredClone(EXAMPLE);
+  const t = structuredClone(m.workstreams[0].tasks[0]); t.name = "__applied"; delete t.deps;
+  const before = m.workstreams[0].tasks.length;
+  _applyOp(m, { op: "addTask", workstream: m.workstreams[0].name, task: t });
+  ok("_applyOp(addTask) appends the task", m.workstreams[0].tasks.length === before + 1);
+  ok("model still validates after the op", !throws(() => validate(m)));
+  ok("unknown op throws", throws(() => _applyOp(m, { op: "nope" })));
 }
 
 // 4) SCHEMA shape sanity — the pieces describe() ships and the skill mirrors.
