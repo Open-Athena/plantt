@@ -470,3 +470,19 @@ body.compact-mode #chart-container { background: var(--surface); padding: 18px; 
 }
 #ui-tip.visible { opacity: 1; }
 @media print { #ui-tip { display: none !important; } }
+
+/* ─── account chip + admin console ─── */
+#user-btn { margin-left: 6px; }
+#user-btn .chip-avatar { width: 16px; height: 16px; border-radius: 50%; vertical-align: -3px; margin-right: 5px; }
+.admin-tabs { display: flex; gap: 6px; margin-bottom: 8px; }
+.admin-tabs button { font: inherit; font-size: 12px; padding: 3px 10px; border: 1px solid var(--border); background: var(--surface); color: var(--fg); border-radius: 4px; cursor: pointer; }
+.admin-tabs button.on { border-color: var(--dep-hl); color: var(--fg); font-weight: 600; }
+.admin-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.admin-table th, .admin-table td { text-align: left; padding: 3px 6px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.admin-table th { font-weight: 600; color: var(--muted, #777); }
+.admin-table td.mono { font-family: var(--font-mono); font-size: 11px; }
+.admin-table button { font: inherit; font-size: 11px; padding: 1px 7px; }
+.admin-scroll { max-height: 52vh; overflow: auto; }
+.admin-row { display: flex; gap: 6px; align-items: center; margin: 6px 0; }
+.admin-row input[type="text"] { flex: 1; }
+.chip-avatar-sm { width: 14px; height: 14px; border-radius: 50%; vertical-align: -2px; margin-right: 4px; }

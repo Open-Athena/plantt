@@ -4505,6 +4505,131 @@ window.plantt = {
   loop();
 })();
 
+// ═══ Account: sign-in chip, denied notice, admin console ═══════════════════════
+// The API is same-origin (Pages Functions). Where there is none — a plain static build, or
+// `npm run dev` without `npm run dev:api` — whoami fails and the chip simply stays hidden.
+let me = null; // { login, avatar, role, via } when signed in
+const userBtn = document.getElementById("user-btn");
+const fmtWhen = (ts) => { if (!ts) return "—"; try { return new Date(ts).toLocaleString(); } catch (e) { return "—"; } };
+const ghLink = (login) => `<a href="https://github.com/${esc(login)}" target="_blank" rel="noopener">@${esc(login)}</a>`;
+function renderUserChip() {
+  if (!userBtn) return;
+  if (me) {
+    const av = me.avatar || `https://avatars.githubusercontent.com/${encodeURIComponent(me.login)}?s=32`;
+    userBtn.innerHTML = `<img class="chip-avatar" src="${esc(av)}" alt=""><span>@${esc(me.login)}</span>`;
+    userBtn.title = `Signed in as @${me.login}${me.role === "admin" ? " (admin)" : ""}`;
+  } else { userBtn.innerHTML = "<span>Sign in</span>"; userBtn.title = "Sign in with GitHub"; }
+  userBtn.hidden = false;
+}
+function signIn() { location.href = "/auth/github?next=" + encodeURIComponent(location.pathname + location.search + location.hash); }
+async function signOut() {
+  try { await fetch("/auth/logout", { method: "POST" }); } catch (e) {}
+  me = null; renderUserChip(); showToast("Signed out");
+}
+async function loadWhoami() {
+  try {
+    const r = await fetch("/api/whoami", { cache: "no-store" });
+    if (r.status === 401) me = null;
+    else if (r.ok) me = await r.json();
+    else return;                                   // API error → leave the chip hidden
+    renderUserChip();
+  } catch (e) { /* no API at this origin → local-only mode */ }
+}
+// JSON fetch that turns API errors into exceptions with the server's message.
+async function api(path, opts) {
+  const r = await fetch(path, { headers: { "content-type": "application/json" }, cache: "no-store", ...opts });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
+  return j;
+}
+// Shared overlay scaffold: Esc / backdrop / Close all dismiss it.
+function openOverlay(html, width) {
+  const ov = document.createElement("div"); ov.id = "modal-overlay";
+  ov.innerHTML = `<div id="modal" role="dialog" aria-modal="true" style="width:${width};max-width:96vw">${html}</div>`;
+  document.body.appendChild(ov);
+  const close = () => { ov.remove(); document.removeEventListener("keydown", onKey, true); };
+  const onKey = (e) => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); close(); } };
+  document.addEventListener("keydown", onKey, true);
+  ov.addEventListener("pointerdown", (e) => { if (e.target === ov) close(); });
+  const done = ov.querySelector('[data-act="done"]'); if (done) done.addEventListener("click", close);
+  return { ov, close };
+}
+function openAccountModal() {
+  if (!me) { signIn(); return; }
+  const { ov, close } = openOverlay(
+    `<div class="modal-title">Account</div>
+     <div class="modal-body"><div>${me.avatar ? `<img class="chip-avatar" src="${esc(me.avatar)}" alt="">` : ""}<b>@${esc(me.login)}</b> · ${esc(me.role)}${me.via ? ` <span style="color:var(--muted)">(admitted via ${esc(me.via)})</span>` : ""}</div></div>
+     <div class="modal-actions">
+       ${me.role === "admin" ? '<button type="button" data-act="admin">Admin console</button>' : ""}
+       <button type="button" data-act="signout">Sign out</button>
+       <button type="button" data-act="done">Close</button>
+     </div>`, "380px");
+  ov.querySelector('[data-act="signout"]').addEventListener("click", () => { close(); signOut(); });
+  const a = ov.querySelector('[data-act="admin"]'); if (a) a.addEventListener("click", () => { close(); openAdminModal(); });
+}
+function openAdminModal() {
+  const { ov } = openOverlay(
+    `<div class="modal-title">Admin console</div>
+     <div class="admin-tabs"><button data-tab="users" class="on">Users</button><button data-tab="allow">Allowlist</button><button data-tab="audit">Audit log</button></div>
+     <div class="modal-body"><div id="admin-pane" class="admin-scroll">Loading…</div></div>
+     <div class="modal-actions"><button type="button" data-act="done">Close</button></div>`, "840px");
+  const pane = ov.querySelector("#admin-pane");
+  let tab = "users", data = null, audit = null;
+  const setTab = (t) => { tab = t; ov.querySelectorAll(".admin-tabs button").forEach((b) => b.classList.toggle("on", b.dataset.tab === t)); render(); };
+  ov.querySelectorAll(".admin-tabs button").forEach((b) => b.addEventListener("click", () => setTab(b.dataset.tab)));
+  const call = async (path, opts) => { try { data = await api(path, opts); render(); } catch (e) { showToast("Error: " + e.message); } };
+  function render() {
+    if (!data) return;
+    if (tab === "users") {
+      const fixed = new Set(data.envAdmins.map((s) => s.toLowerCase()));
+      pane.innerHTML = `<table class="admin-table"><tr><th>User</th><th>Role</th><th>Org member</th><th>First seen</th><th>Last seen</th><th></th></tr>` +
+        data.users.map((u) => `<tr><td>${u.avatar_url ? `<img class="chip-avatar-sm" src="${esc(u.avatar_url)}" alt="">` : ""}${ghLink(u.login)}</td>
+          <td>${esc(u.role)}${fixed.has(u.login.toLowerCase()) ? " (fixed)" : ""}</td><td>${u.org_member ? "yes" : "no"}</td>
+          <td>${esc(fmtWhen(u.first_seen_at))}</td><td>${esc(fmtWhen(u.last_seen_at))}</td>
+          <td>${fixed.has(u.login.toLowerCase()) ? "" : `<button data-role="${u.role === "admin" ? "member" : "admin"}" data-login="${esc(u.login)}">${u.role === "admin" ? "Make member" : "Make admin"}</button>`}</td></tr>`).join("") +
+        `</table>${data.users.length ? "" : '<div class="plan-empty">Nobody has signed in yet.</div>'}`;
+      pane.querySelectorAll("button[data-role]").forEach((b) => b.addEventListener("click", () =>
+        call("/api/admin/users/" + encodeURIComponent(b.dataset.login), { method: "PATCH", body: JSON.stringify({ role: b.dataset.role }) })));
+    } else if (tab === "allow") {
+      pane.innerHTML = `<div class="admin-row"><input type="text" id="allow-login" placeholder="GitHub login" style="flex:0 0 200px"><input type="text" id="allow-note" placeholder="note (optional)"><button id="allow-add">Add</button></div>
+        <div style="font-size:12px;color:var(--muted);margin-bottom:6px">Members of the ${esc(data.org)} GitHub org and ${data.envAdmins.map((a) => "@" + esc(a)).join(", ")} are admitted without a row here. Removing a row takes effect on the person's next request.</div>
+        <table class="admin-table"><tr><th>Login</th><th>Added by</th><th>When</th><th>Note</th><th></th></tr>` +
+        data.allowed.map((a) => `<tr><td>${ghLink(a.login)}</td><td>@${esc(a.added_by)}</td><td>${esc(fmtWhen(a.added_at))}</td><td>${esc(a.note || "")}</td><td><button data-del="${esc(a.login)}" title="Remove from allowlist">✕</button></td></tr>`).join("") +
+        `</table>${data.allowed.length ? "" : '<div class="plan-empty">The allowlist is empty.</div>'}`;
+      const add = () => { const login = pane.querySelector("#allow-login").value.trim(); if (!login) return;
+        call("/api/admin/allow", { method: "POST", body: JSON.stringify({ login, note: pane.querySelector("#allow-note").value.trim() }) }); };
+      pane.querySelector("#allow-add").addEventListener("click", add);
+      pane.querySelector("#allow-login").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); add(); } });
+      pane.querySelector("#allow-login").focus();
+      pane.querySelectorAll("button[data-del]").forEach((b) => b.addEventListener("click", () =>
+        call("/api/admin/allow/" + encodeURIComponent(b.dataset.del), { method: "DELETE" })));
+    } else {
+      if (!audit) { pane.textContent = "Loading…"; api("/api/admin/audit").then((a) => { audit = a; render(); }).catch((e) => { pane.textContent = "Error: " + e.message; }); return; }
+      const rows = [
+        ...audit.auth.map((r) => ({ ts: r.ts, who: r.login, what: r.event, detail: r.detail || "", plan: "" })),
+        ...audit.plans.map((r) => ({ ts: r.ts, who: r.actor_login || "anon", what: r.action, detail: r.detail_json || "", plan: r.plan_name || r.plan_id })),
+      ].sort((a, b) => b.ts - a.ts);
+      pane.innerHTML = `<div class="admin-row"><input type="text" id="audit-q" placeholder="filter…"></div>
+        <table class="admin-table" id="audit-table"><tr><th>When</th><th>Who</th><th>Event</th><th>Plan</th><th>Detail</th></tr>` +
+        rows.map((r) => `<tr data-q="${esc((r.who + " " + r.what + " " + r.plan + " " + r.detail).toLowerCase())}"><td class="mono">${esc(fmtWhen(r.ts))}</td><td>${r.who && r.who !== "anon" ? ghLink(r.who) : esc(r.who || "")}</td><td>${esc(r.what)}</td><td>${esc(r.plan)}</td><td class="mono">${esc(r.detail)}</td></tr>`).join("") +
+        `</table>${rows.length ? "" : '<div class="plan-empty">No events yet.</div>'}`;
+      pane.querySelector("#audit-q").addEventListener("input", (e) => { const q = e.target.value.toLowerCase();
+        pane.querySelectorAll("#audit-table tr[data-q]").forEach((tr) => { tr.hidden = !!q && !tr.dataset.q.includes(q); }); });
+    }
+  }
+  call("/api/admin/users");
+}
+if (userBtn) userBtn.addEventListener("click", openAccountModal);
+loadWhoami();
+// A refused (or cancelled) sign-in lands here with ?denied=<login|error>.
+{
+  const u = new URL(location.href), denied = u.searchParams.get("denied");
+  if (denied) {
+    showToast(denied === "access_denied" ? "Sign-in cancelled." : `GitHub account @${denied} isn’t allowed to sign in. Ask an admin to add you to the allowlist.`);
+    u.searchParams.delete("denied"); window.history.replaceState(null, "", u.pathname + u.search + u.hash);
+  }
+}
+
 // ─── one-time hand-off of saved plans from the old host (openathena.ai/plantt) ───
 // localStorage is per origin, so the move to plantt.oa.dev would have stranded every saved
 // plan. The old host's page POSTs them to /api/legacy, which parks them under a one-time

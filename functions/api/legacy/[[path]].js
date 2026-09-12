@@ -10,11 +10,10 @@ const KEY_OK = /^(tg-|tufte-gantt-|plantt[-_])/;   // the app's localStorage nam
 const MAX_VALUE = 1_900_000;                       // D1 caps a row at 2 MB
 
 export async function onRequestPost({ request, env }) {
-  let items;
-  try { items = JSON.parse((await request.formData()).get("items") || "{}"); }
+  let form, items;
+  try { form = await request.formData(); items = JSON.parse(form.get("items") || "{}"); }
   catch { return new Response("bad payload", { status: 400 }); }
-  const form = await request.clone().formData().catch(() => null);
-  let hash = String((form && form.get("hash")) || "");
+  let hash = String(form.get("hash") || "");
   if (!/^#[A-Za-z0-9+\-_%.~]*$/.test(hash)) hash = "";   // only a plausible lz-string fragment
 
   const entries = Object.entries(items || {})
