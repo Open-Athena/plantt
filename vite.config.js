@@ -6,7 +6,7 @@ export default defineConfig({
   // for a sub-path host (the old GitHub Pages deploy used "/plantt/").
   base: process.env.PLANTT_BASE || "/",
   server: {
-    open: true,   // open the browser on `npm run dev`
+    open: !process.env.PLANTT_NO_OPEN,   // open the browser on `npm run dev` (PLANTT_NO_OPEN=1 to skip)
     host: true,
     // The API and sign-in routes are Pages Functions; run `npm run dev:api` alongside
     // `npm run dev` and Vite forwards them to wrangler on :8788.

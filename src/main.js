@@ -6,6 +6,16 @@ import { _findItem, _allItems, _applyOp, _summarizeOps } from "./ops.js";
 (function () {
 "use strict";
 
+// ─── sync state (declared first: startup code reads it before the sync section runs) ───
+const SYNC_POLL_MS = 4000;
+let syncOn = false;          // signed in and the API answered
+let remoteMeta = null;       // server meta of the ACTIVE plan (id, name, level, head, …)
+let lastRemoteHead = null;   // server head we last agreed with; current !== this ⇒ we diverged
+let knownRemote = new Set(); // remote hashes already grafted or pushed for the active plan
+let pushQueue = [], pushing = false, pushFailed = 0, pollTimer = null, applyingRemote = false;
+let lastDivergeToast = 0, viewOnlyToasted = false;
+let me = null;               // { login, avatar, role, via } when signed in
+
 // ─── Default Data ────────────────────────────────────────────────
 const DEFAULT_DATA = {
   title: "Example Project Plan",
@@ -1484,6 +1494,13 @@ function decodeState(hash) {
   } catch (e) { return null; }
 }
 function writeUrlNow() {
+  // Server-backed plan: the address is /p/<uuid> and carries no state (the "export URL",
+  // /#<blob>, is minted on demand from the Share dialog). Local mode: the #blob as always.
+  if (remoteMeta && currentPlan && remoteMeta.id === currentPlan.uuid) {
+    const q = new URLSearchParams(location.search); q.delete("at"); q.delete("legacy"); q.delete("denied");
+    try { window.history.replaceState(null, "", planPath(currentPlan.uuid) + (q.toString() ? "?" + q : "")); } catch (e) {}
+    return;
+  }
   try { window.history.replaceState(null, "", "#" + encodeState()); } catch (e) { /* URL too long, etc. */ }
 }
 // URL and localStorage are written together (see persistPlan), so a reload never sees
@@ -1745,6 +1762,7 @@ function addImportedNode(m, parentId, detached) {
   schedulePersist();
   updateHistoryButtons();
   if (vizOpen) renderViz();
+  syncPushNode(node);
   return node.id;
 }
 
@@ -1766,6 +1784,7 @@ function recordChange(desc) {
   schedulePersist();
   updateHistoryButtons();
   if (vizOpen) renderViz();
+  syncPushNode(node); // server-backed plan → append it there too (no-op in local mode)
 }
 function undo() { if (canUndo()) jumpTo(curNode().parentId, "Undo"); }
 function redo() { if (canRedo()) jumpTo(curNode().activeChild, "Redo"); }
@@ -1793,6 +1812,7 @@ function jumpTo(id, label) {
   updateHistoryButtons();
   if (label) setStatus(`${label}: ${node.summary}`, false);
   if (vizOpen) renderViz();
+  syncHead(node); // undo/redo/jump moves the shared head too (guarded while applying remote moves)
 }
 function pruneHistory() {
   while (history.nodes.size > history.limit) {
@@ -1839,6 +1859,7 @@ function squashHistory() {
   const desc = { source: "squash", verb: "squash", targetType: "document",
     targetName: currentPlan ? currentPlan.name : "plan", details: {} };
   history = newHistory(model, desc);
+  syncPushNode(history.nodes.get(history.rootId)); // a fresh root; collaborators follow it
   schedulePersist();
   updateHistoryButtons();
   if (vizOpen) renderViz();
@@ -2475,6 +2496,7 @@ function openWorkstreamsModal() {
 }
 
 function openPlansModal() {
+  if (syncOn) { openPlansIndex(); return; } // signed in: the server-backed index instead
   const fmtDate = (ts) => { try { return new Date(ts).toLocaleString(); } catch (e) { return "\u2014"; } };
   const plans = listPlans();
   const rows = plans.map((p) => {
@@ -4146,6 +4168,7 @@ window.plantt = {
   // open()/duplicate()/create() do, exactly like opening a plan in the UI.
   plans: {
     list() {
+      if (syncOn) return remotePlans.list();
       return listPlans().map((p) => ({
         uuid: p.uuid, name: p.name, note: p.note || "",
         createdAt: p.createdAt, lastModified: p.lastModified,
@@ -4154,17 +4177,20 @@ window.plantt = {
     },
     // Read any saved plan's full model WITHOUT switching to it.
     get(uuid) {
+      if (syncOn) return remotePlans.get(uuid);
       const p = loadPlan(uuid);
       return p ? { uuid: p.uuid, name: p.name, model: clone(p.model) } : null;
     },
     // Make `uuid` the active plan (what every other read/write then targets).
     open(uuid) {
+      if (syncOn) return remotePlans.open(uuid);
       if (!loadPlan(uuid)) return { ok: false, error: "no saved plan with uuid " + uuid };
       switchPlan(uuid);
       return { ok: true, uuid, name: currentPlan.name };
     },
     // Copy a saved plan into a new one (fresh uuid + history). Switches to it unless open:false.
     duplicate(uuid, name, opts) {
+      if (syncOn) return remotePlans.duplicate(uuid, name, opts);
       const p = loadPlan(uuid);
       if (!p) return { ok: false, error: "no saved plan with uuid " + uuid };
       const obj = createPlanObj(name || (p.name || "Plan") + " (copy)", p.model);
@@ -4174,6 +4200,7 @@ window.plantt = {
     },
     // Create a fresh plan from `model` (validated) or empty. Switches to it unless open:false.
     create(name, model, opts) {
+      if (syncOn) return remotePlans.create(name, model, opts);
       const md = model || emptyModel(name);
       try { migrateModel(md); validate(md); } catch (e) { return { ok: false, error: e.message }; }
       const obj = createPlanObj(name || "Untitled plan", md);
@@ -4491,7 +4518,11 @@ window.plantt = {
         await sleep(2000);
         continue;
       }
-      const results = commands.map((c) => ({ id: c.id, ...run(c) }));
+      const results = [];
+      for (const c of commands) { // run() may answer with a promise in sync mode (plans.* hit the server)
+        let r; try { r = await run(c); } catch (e) { r = { ok: false, error: String(e && e.message || e) }; }
+        results.push({ id: c.id, ...r });
+      }
       // Always echo fresh state back, so the relay's /state is current after every cycle.
       try {
         await fetch(relay + "/ack", {
@@ -4505,10 +4536,431 @@ window.plantt = {
   loop();
 })();
 
+// ═══ Sync: server-backed plans (signed in, or a public plan opened by link) ═══════
+// The undo tree is append-only and content-addressed, so syncing is three verbs: push the
+// nodes I make, pull the nodes I lack, and agree on a head. Two people editing at once
+// simply produce two branches under a common parent; nothing is ever lost.
+// (sync state lives near the top of the file: persistPlan/writeUrlNow read it during startup)
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+const syncBadge = document.createElement("div"); syncBadge.id = "sync-badge"; syncBadge.hidden = true; document.body.appendChild(syncBadge);
+function setSyncBadge(txt, cls) { syncBadge.textContent = txt || ""; syncBadge.className = cls || ""; syncBadge.hidden = !txt; }
+const canEditRemote = () => !!remoteMeta && (remoteMeta.level === "edit" || remoteMeta.level === "manage");
+const idleBadge = () => setSyncBadge(remoteMeta ? (canEditRemote() ? "synced" : "view only") : "", "ok");
+const planPath = (id) => `/p/${id}`;
+
+async function sha256Hex(str) {
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(str));
+  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+// A node as the wire sees it: hashes instead of local integer ids, plus its snapshot body.
+async function wireNode(n, nodesMap) {
+  const parent = n.parentId != null ? (nodesMap || history.nodes).get(n.parentId) : null;
+  const body = JSON.stringify(n.snapshot);
+  return { node: { hash: n.hash, parentHash: parent ? parent.hash : null, sha256: await sha256Hex(body), summary: n.summary,
+    change: n.change, ts: n.ts, detached: !!n.detached }, body };
+}
+
+// ── outbound ──
+function syncPushNode(n) {
+  if (!remoteMeta || applyingRemote || !n) return;
+  if (!canEditRemote()) { viewOnlyNotice(); return; }
+  pushQueue.push({ kind: "node", id: n.id, plan: remoteMeta.id, head: true });
+  flushPush();
+}
+function syncHead(n) {
+  if (!remoteMeta || applyingRemote || !n || !canEditRemote()) return;
+  pushQueue.push({ kind: "head", hash: n.hash, plan: remoteMeta.id });
+  flushPush();
+}
+function viewOnlyNotice() {
+  if (viewOnlyToasted) return; viewOnlyToasted = true;
+  showToast("You have view access to this plan: your changes stay in this browser only. Fork it to keep them.", { duration: 9000 });
+}
+async function flushPush() {
+  if (pushing) return; pushing = true;
+  try {
+    while (pushQueue.length) {
+      const planId = pushQueue[0].plan;
+      setSyncBadge("syncing…", "busy");
+      try {
+        if (pushQueue[0].kind === "node") {
+          // Coalesce consecutive node pushes for one plan into a single request.
+          const batch = [];
+          while (pushQueue.length && pushQueue[0].plan === planId && pushQueue[0].kind === "node" && batch.length < 20) batch.push(pushQueue[0]), pushQueue.shift();
+          const nodes = [], blobs = {}; let head = null;
+          for (const item of batch) {
+            const n = remoteMeta && remoteMeta.id === planId && history ? history.nodes.get(item.id) : null;
+            if (!n) continue;
+            const w = await wireNode(n); nodes.push(w.node); blobs[w.node.sha256] = w.body;
+            if (item.head) head = n.hash;
+          }
+          if (nodes.length) {
+            let r;
+            try { r = await api(`/api/plans/${planId}/nodes`, { method: "POST", body: JSON.stringify({ nodes, blobs, head }) }); }
+            catch (e) { if (/forbidden|unauthenticated/.test(e.message)) { viewOnlyNotice(); pushFailed = 0; continue; } pushQueue.unshift(...batch); throw e; }
+            for (const n of nodes) knownRemote.add(n.hash);
+            if (remoteMeta && remoteMeta.id === planId) { if (head) lastRemoteHead = r.head; remoteMeta.updatedAt = r.updatedAt; }
+          }
+        } else {
+          const item = pushQueue[0];
+          let r;
+          try { r = await api(`/api/plans/${planId}/head`, { method: "POST", body: JSON.stringify({ hash: item.hash }) }); }
+          catch (e) { if (/forbidden|unauthenticated|unknown node/.test(e.message)) { pushQueue.shift(); continue; } throw e; }
+          pushQueue.shift();
+          if (remoteMeta && remoteMeta.id === planId) { lastRemoteHead = r.head; remoteMeta.updatedAt = r.updatedAt; }
+        }
+        pushFailed = 0;
+      } catch (e) {
+        pushFailed++;
+        setSyncBadge(`offline · ${pushQueue.length} pending`, "bad");
+        if (pushFailed > 8) break;                        // give up for now; the next reconcile repairs it
+        await wait(Math.min(30000, 1000 * 2 ** Math.min(pushFailed, 5)));
+      }
+    }
+  } finally { pushing = false; if (!pushQueue.length) idleBadge(); }
+}
+
+// ── inbound ──
+async function fetchNodes(planId, hashes) {
+  const out = [];
+  for (let i = 0; i < hashes.length; i += 50) out.push(...(await api(`/api/plans/${planId}/nodes?hashes=${hashes.slice(i, i + 50).join(",")}`)).nodes);
+  return out;
+}
+// Insert remote nodes (with bodies) into the local tree, parents first. A node whose parent
+// we don't hold (pruned locally, or foreign) becomes a detached head, as URL imports do.
+function graftRemote(nodes) {
+  const incoming = new Map(nodes.map((n) => [n.hash, n]));
+  const placed = new Set();
+  for (let progress = true; progress;) {
+    progress = false;
+    for (const rn of nodes) {
+      if (placed.has(rn.hash)) continue;
+      if (history.byHash.has(rn.hash)) { placed.add(rn.hash); knownRemote.add(rn.hash); continue; }
+      const parentLocal = rn.parentHash ? history.byHash.get(rn.parentHash) : undefined;
+      if (rn.parentHash && parentLocal == null && incoming.has(rn.parentHash) && !placed.has(rn.parentHash)) continue; // parent first
+      let snapshot; try { snapshot = JSON.parse(rn.body); migrateModel(snapshot); } catch (e) { placed.add(rn.hash); continue; }
+      const parentId = parentLocal != null ? parentLocal : null;
+      const detached = parentId == null && history.rootId != null;
+      const parentHash = parentId != null ? history.nodes.get(parentId).hash : "";
+      const node = { id: history.nextId++, parentId, childIds: [], activeChild: null, snapshot,
+        change: rn.change || { source: "remote", verb: "replace", targetType: "document", targetName: rn.summary, details: { label: rn.summary } },
+        summary: rn.summary || "Remote edit", ts: rn.ts || Date.now(), hash: hashOf(snapshot, parentHash), detached, author: rn.author || null };
+      history.nodes.set(node.id, node);
+      history.byHash.set(node.hash, node.id);
+      if (node.hash !== rn.hash) history.byHash.set(rn.hash, node.id); // detached here: answer to the server's name too
+      knownRemote.add(rn.hash);
+      if (parentId != null) history.nodes.get(parentId).childIds.push(node.id);
+      placed.add(rn.hash); progress = true;
+    }
+  }
+}
+// Which remote nodes are worth pulling: everything on the head's ancestry, plus anything at
+// least as new as our oldest node (so a locally pruned old branch doesn't come back forever).
+function missingRemote(meta) {
+  const byHash = new Map(meta.nodes.map((n) => [n.hash, n]));
+  const onHead = new Set();
+  for (let h = meta.head; h && byHash.has(h) && !onHead.has(h); h = byHash.get(h).parentHash) onHead.add(h);
+  const oldest = history.nodes.size >= HISTORY_LIMIT ? Math.min(...[...history.nodes.values()].map((n) => n.ts || 0)) : 0;
+  return meta.nodes.filter((n) => !history.byHash.has(n.hash) && !knownRemote.has(n.hash) && (onHead.has(n.hash) || (n.ts || 0) >= oldest)).map((n) => n.hash);
+}
+function localOnlyNodes(meta) {
+  const remote = new Set(meta.nodes.map((n) => n.hash));
+  return [...history.nodes.values()].filter((n) => !remote.has(n.hash) && !knownRemote.has(n.hash)).sort((a, b) => a.id - b.id);
+}
+function quietJump(localId) { applyingRemote = true; try { jumpTo(localId, null); } finally { applyingRemote = false; } }
+
+// Someone else moved the server head. Follow it unless we have diverged since we last agreed.
+async function settleRemoteHead(head, who) {
+  if (!remoteMeta || !head) return;
+  if (!history.byHash.has(head)) {
+    const meta = await api(`/api/plans/${remoteMeta.id}/tree`);
+    remoteMeta = { ...meta, nodes: undefined };
+    const miss = missingRemote(meta);
+    if (miss.length) graftRemote(await fetchNodes(remoteMeta.id, miss));
+    if (!history.byHash.has(head)) return;
+  }
+  const diverged = lastRemoteHead != null && curNode().hash !== lastRemoteHead;
+  lastRemoteHead = head;
+  const target = history.byHash.get(head);
+  if (target === history.currentId) return;
+  if (!diverged) { quietJump(target); setStatus(`Updated by @${who || "someone"}`, false); schedulePersist(); updateHistoryButtons(); if (vizOpen) renderViz(); return; }
+  updateHistoryButtons(); if (vizOpen) renderViz(); schedulePersist();
+  if (Date.now() - lastDivergeToast > 30000) {
+    lastDivergeToast = Date.now();
+    showToast(`@${who || "someone"} also edited this plan (on another branch). Click to jump to their version.`, { duration: 10000, onClick: () => { quietJump(history.byHash.get(head)); lastRemoteHead = head; } });
+  }
+}
+async function pollHead() {
+  if (!remoteMeta || document.visibilityState === "hidden") return;
+  try {
+    const r = await api(`/api/plans/${remoteMeta.id}/head`);
+    if (!r.head) return;
+    if (r.head === curNode().hash) { lastRemoteHead = r.head; return; }
+    if (r.head === lastRemoteHead) return;               // server hasn't moved; we have
+    await settleRemoteHead(r.head, r.lastEditBy);
+  } catch (e) { /* offline; next tick */ }
+}
+function startPolling() { stopPolling(); pollTimer = setInterval(pollHead, SYNC_POLL_MS); }
+function stopPolling() { if (pollTimer) clearInterval(pollTimer); pollTimer = null; }
+window.addEventListener("focus", () => { if (remoteMeta) pollHead(); });
+
+// ── opening a plan from the server (cached copy, if any, is reconciled against it) ──
+async function openRemotePlan(id, opts) {
+  opts = opts || {};
+  id = String(id).toLowerCase();
+  let meta;
+  try { meta = await api(`/api/plans/${id}/tree`); }
+  catch (e) { if (!opts.quiet) showPrivateScreen(id, e); throw e; }
+  stopPolling(); pushQueue = []; knownRemote = new Set(); viewOnlyToasted = false;
+  if (currentPlan && currentPlan.uuid !== id) persistPlan();
+  const local = loadPlan(id);
+  if (local) adoptPlan(local);
+  else {
+    const obj = createPlanObj(meta.name, emptyModel(meta.name)); obj.uuid = id; obj.createdAt = meta.createdAt || obj.createdAt;
+    writePlanStore(obj); adoptPlan(loadPlan(id));
+    history = { nodes: new Map(), byHash: new Map(), rootId: null, currentId: null, nextId: 1, limit: HISTORY_LIMIT };
+  }
+  remoteMeta = { ...meta, nodes: undefined };
+  const miss = missingRemote(meta);
+  if (miss.length) graftRemote(await fetchNodes(id, miss));
+  if (history.rootId == null) {                              // built purely from the server
+    const roots = [...history.nodes.values()].filter((n) => n.parentId == null).sort((a, b) => a.ts - b.ts);
+    if (!roots.length) history = newHistory(model, { source: "init", verb: "init", targetType: "document", targetName: meta.name, details: {} });
+    else { history.rootId = roots[0].id; roots[0].detached = false; roots.slice(1).forEach((r) => { r.detached = true; }); }
+    history.currentId = meta.head && history.byHash.has(meta.head) ? history.byHash.get(meta.head) : history.rootId;
+    model = clone(history.nodes.get(history.currentId).snapshot);
+  }
+  currentPlan.name = meta.name;                              // the server's name wins
+  applyTogglesToUI();
+  writeEditor(JSON.stringify(model, null, 2)); renderFromModel(); editorBaseline = null;
+  if (meta.head && history.byHash.has(meta.head) && history.byHash.get(meta.head) !== history.currentId) quietJump(history.byHash.get(meta.head));
+  lastRemoteHead = meta.head || null;
+  if (canEditRemote()) {                                     // push what the server lacks; never move its head onto an old local branch
+    const mine = localOnlyNodes(meta);
+    mine.forEach((n, i) => pushQueue.push({ kind: "node", id: n.id, plan: id, head: !meta.head && i === mine.length - 1 }));
+    if (mine.length && meta.head) showToast(`Opened the latest version; ${mine.length} local step${mine.length === 1 ? "" : "s"} kept as a branch`, { duration: 7000 });
+    flushPush();
+  }
+  updateHistoryButtons(); if (vizOpen) renderViz();
+  persistPlan(); startPolling(); idleBadge();
+  if (opts.at && history.byHash.has(opts.at)) jumpTo(history.byHash.get(opts.at), "Forked from here");
+  setStatus(`Plan: ${currentPlan.name}${canEditRemote() ? "" : " (view only)"}`, false);
+  document.title = `${currentPlan.name} · plantt`;
+  return meta;
+}
+function showPrivateScreen(id, err) {
+  const status = /unauthenticated/.test(err.message) ? 401 : /forbidden/.test(err.message) ? 403 : /not found/.test(err.message) ? 404 : 0;
+  const msg = status === 404 ? "This plan doesn’t exist (or was deleted)."
+    : status === 401 ? "This plan is private. Sign in with GitHub to open it."
+    : status === 403 ? `This plan is private and hasn’t been shared with @${me ? me.login : "you"}. Ask its owner to share it.`
+    : "Could not load this plan: " + err.message;
+  const { ov, close } = openOverlay(`<div class="modal-title">${status === 404 ? "Not found" : "Private plan"}</div>
+    <div class="modal-body"><div>${esc(msg)}</div><div style="font-size:11px;color:var(--muted);font-family:var(--font-mono)">${esc(id)}</div></div>
+    <div class="modal-actions">${!me ? '<button type="button" data-act="signin">Sign in with GitHub</button>' : '<button type="button" data-act="plans">My plans</button>'}<button type="button" data-act="done">Close</button></div>`, "420px");
+  const s = ov.querySelector('[data-act="signin"]'); if (s) s.addEventListener("click", signIn);
+  const pl = ov.querySelector('[data-act="plans"]'); if (pl) pl.addEventListener("click", () => { close(); openPlansIndex(); });
+}
+
+// ── first sign-in: everything syncs, so local plans are uploaded (except the untouched demo) ──
+const isUntouchedDefault = (p) => (!p.history || !p.history.nodes || p.history.nodes.length <= 1) && sameJSON(p.model, DEFAULT_DATA);
+function rekeyLocalPlan(oldId, newId) {
+  const p = loadPlan(oldId); if (!p) return;
+  p.uuid = newId; writePlanStore(p); localStorage.removeItem(PLAN_PREFIX + oldId);
+  if (currentPlan && currentPlan.uuid === oldId) { currentPlan.uuid = newId; try { localStorage.setItem(CURRENT_PLAN_KEY, newId); } catch (e) {} }
+}
+// Push a stored plan's whole tree (or its lone model) to `id`, head = its current node.
+async function pushWholeTree(id, p) {
+  let nodes, currentId;
+  if (p.history && Array.isArray(p.history.nodes) && p.history.nodes.length) {
+    const map = new Map(p.history.nodes.map((n) => [n.id, n]));
+    rehashHistory({ nodes: map, rootId: p.history.rootId, currentId: p.history.currentId, nextId: p.history.nextId, limit: HISTORY_LIMIT });
+    nodes = [...map.values()].sort((a, b) => a.id - b.id); currentId = p.history.currentId;
+    for (let i = 0; i < nodes.length; i += 20) {
+      const chunk = nodes.slice(i, i + 20), wire = [], blobs = {};
+      for (const n of chunk) { const w = await wireNode(n, map); wire.push(w.node); blobs[w.node.sha256] = w.body; }
+      const last = i + 20 >= nodes.length;
+      const cur = map.get(currentId);
+      await api(`/api/plans/${id}/nodes`, { method: "POST", body: JSON.stringify({ nodes: wire, blobs, head: last && cur ? cur.hash : null }) });
+    }
+  } else {
+    const snapshot = clone(p.model), body = JSON.stringify(snapshot);
+    await api(`/api/plans/${id}/nodes`, { method: "POST", body: JSON.stringify({ nodes: [{ hash: hashOf(snapshot, ""), parentHash: null, sha256: await sha256Hex(body),
+      summary: "Initial state", change: { source: "init", verb: "init", targetType: "document", targetName: p.name, details: {} }, ts: p.createdAt || Date.now() }], blobs: { [await sha256Hex(body)]: body }, head: hashOf(snapshot, "") }) });
+  }
+}
+async function createRemotePlan(id, name, createdAt, imported) {
+  try { return await api("/api/plans", { method: "POST", body: JSON.stringify({ id, name, createdAt, imported: !!imported }) }); }
+  catch (e) {
+    if (!/exists/.test(e.message)) throw e;
+    const fresh = uuidv4(); rekeyLocalPlan(id, fresh);        // someone else holds that uuid (a shared link both adopted)
+    return api("/api/plans", { method: "POST", body: JSON.stringify({ id: fresh, name, createdAt, imported: !!imported }) });
+  }
+}
+async function uploadLocalPlans(serverIds, force) {
+  if (currentPlan) persistPlan();
+  const uploaded = [];
+  for (const p of listPlans()) {
+    if (serverIds.has(p.uuid)) continue;
+    if (!force && isUntouchedDefault(p)) continue;
+    try {
+      const created = await createRemotePlan(p.uuid, p.name, p.createdAt, true);
+      await pushWholeTree(created.id, loadPlan(created.id) || p);
+      uploaded.push(created.id);
+    } catch (e) { showToast(`Could not upload “${p.name}”: ${e.message}`); }
+  }
+  return uploaded;
+}
+async function startSync() {
+  const m = location.pathname.match(/^\/p\/([0-9a-f-]{36})/i);
+  const target = m ? m[1].toLowerCase() : null;
+  const at = new URLSearchParams(location.search).get("at");
+  if (!me) { if (target) { try { await openRemotePlan(target, { at }); } catch (e) {} } return; }   // anonymous: public plans only
+  syncOn = true;
+  let list;
+  try { list = (await api("/api/plans")).plans; } catch (e) { showToast("Could not reach the plan server: " + e.message); return; }
+  const ids = new Set(list.map((p) => p.id));
+  let uploaded = await uploadLocalPlans(ids, false);
+  if (!list.length && !uploaded.length) uploaded = await uploadLocalPlans(ids, true);   // brand-new account: keep the demo as plan #1
+  uploaded.forEach((id) => ids.add(id));
+  if (uploaded.length) showToast(`Uploaded ${uploaded.length} local plan${uploaded.length === 1 ? "" : "s"} to your account`);
+  const openId = target || (currentPlan && ids.has(currentPlan.uuid) ? currentPlan.uuid : (list[0] && list[0].id) || uploaded[0]);
+  if (openId) { try { await openRemotePlan(openId, { at }); } catch (e) {} }
+}
+
+// ── plans index (replaces the local Plans modal once signed in) ──
+const fmtAgo = (ts) => { if (!ts) return "—"; const d = Date.now() - ts; if (d < 60e3) return "just now"; if (d < 3600e3) return Math.round(d / 60e3) + " min ago"; if (d < 86400e3) return Math.round(d / 3600e3) + " h ago"; if (d < 14 * 86400e3) return Math.round(d / 86400e3) + " d ago"; return new Date(ts).toLocaleDateString(); };
+function sharedWithLabel(p) {
+  let s = p.visibility === "public" ? "Anyone with the link" : p.visibility === "org" ? "Open Athena" : "Only owner";
+  if (p.editMode === "public") s += " · anyone can edit"; else if (p.editMode === "org") s += " · org can edit";
+  if (p.aclCount) s += ` · ${p.aclCount} ${p.aclCount === 1 ? "person" : "people"}`;
+  return s;
+}
+function forkedFromHtml(p) {
+  const f = p.forkedFromMeta; if (!f) return "—";
+  if (f.private) return `<span style="color:var(--muted)">${f.deleted ? "deleted plan" : "private plan"}</span>`;
+  return `<a href="${planPath(f.id)}${f.hash ? "?at=" + esc(f.hash) : ""}" data-open="${esc(f.id)}" data-at="${esc(f.hash || "")}" title="${esc(f.summary || "")}">${esc(f.name)}</a>${f.summary ? ` <span style="color:var(--muted)">@ ${esc(f.summary)}</span>` : ""}`;
+}
+function openPlansIndex() {
+  const { ov, close } = openOverlay(
+    `<div class="modal-title">Plans</div>
+     <div class="admin-row"><button type="button" data-act="new">+ New plan</button>
+       <span class="admin-tabs" style="margin:0"><button data-f="all" class="on">All</button><button data-f="mine">Mine</button><button data-f="shared">Shared with me</button><button data-f="org">Open Athena</button><button data-f="archived">Archived</button></span>
+       <input type="text" id="pq" placeholder="search name, tasks, owner…"></div>
+     <div class="modal-body"><div id="plans-pane" class="admin-scroll">Loading…</div></div>
+     <div class="modal-actions"><button type="button" data-act="done">Close</button></div>`, "960px");
+  const pane = ov.querySelector("#plans-pane");
+  let filter = "all", q = "", sortKey = "updatedAt", sortDir = -1, data = [];
+  const load = async () => { try { data = (await api(`/api/plans?filter=${filter}&q=${encodeURIComponent(q)}`)).plans; render(); } catch (e) { pane.textContent = "Error: " + e.message; } };
+  ov.querySelectorAll("[data-f]").forEach((b) => b.addEventListener("click", () => { filter = b.dataset.f; ov.querySelectorAll("[data-f]").forEach((x) => x.classList.toggle("on", x === b)); load(); }));
+  let qt; ov.querySelector("#pq").addEventListener("input", (e) => { q = e.target.value.trim(); clearTimeout(qt); qt = setTimeout(load, 200); });
+  ov.querySelector('[data-act="new"]').addEventListener("click", async () => {
+    try { const p = await api("/api/plans", { method: "POST", body: JSON.stringify({ name: "Untitled plan" }) });
+      const obj = createPlanObj(p.name, emptyModel(p.name)); obj.uuid = p.id; writePlanStore(obj);
+      close(); await openRemotePlan(p.id); openShareModal(p.id, { rename: true }); }
+    catch (e) { showToast("Error: " + e.message); }
+  });
+  const open = async (id, at) => { close(); try { await openRemotePlan(id, { at }); } catch (e) {} };
+  function render() {
+    const rows = data.slice().sort((a, b) => { const va = a[sortKey] || "", vb = b[sortKey] || ""; return (va > vb ? 1 : va < vb ? -1 : 0) * sortDir; });
+    const th = (key, label) => `<th class="sortable" data-sort="${key}">${label}${sortKey === key ? (sortDir < 0 ? " ▾" : " ▴") : ""}</th>`;
+    pane.innerHTML = `<table class="admin-table"><tr>${th("name", "Name")}${th("owner", "Owner")}${th("updatedAt", "Last edit")}<th>Forked from</th><th>Shared with</th><th></th></tr>` +
+      rows.map((p) => { const cur = currentPlan && currentPlan.uuid === p.id; const mine = p.level === "manage";
+        return `<tr class="${cur ? "current" : ""}"><td><span class="plan-link" data-open="${esc(p.id)}">${esc(p.name)}</span>${cur ? ' <b style="font-size:11px">open</b>' : ""}${p.archived ? ' <span style="color:var(--muted);font-size:11px">archived</span>' : ""}</td>
+          <td>${p.ownerAvatar ? `<img class="chip-avatar-sm" src="${esc(p.ownerAvatar)}" alt="">` : ""}${ghLink(p.owner)}</td>
+          <td title="${esc(fmtWhen(p.updatedAt))}">${esc(fmtAgo(p.updatedAt))}${p.lastEditBy ? ` by @${esc(p.lastEditBy)}` : ""}</td>
+          <td>${forkedFromHtml(p)}</td><td>${esc(sharedWithLabel(p))}</td>
+          <td style="white-space:nowrap"><button data-open="${esc(p.id)}" ${cur ? "disabled" : ""}>Open</button> <button data-fork="${esc(p.id)}">Fork</button>${mine ? ` <button data-share="${esc(p.id)}">Share…</button> <button data-arch="${esc(p.id)}" data-archived="${p.archived ? 1 : 0}">${p.archived ? "Unarchive" : "Archive"}</button> <button data-del="${esc(p.id)}" title="Delete…">✕</button>` : ""}</td></tr>`; }).join("") +
+      `</table>${rows.length ? "" : '<div class="plan-empty">No plans here.</div>'}`;
+    pane.querySelectorAll("[data-sort]").forEach((h) => h.addEventListener("click", () => { const k = h.dataset.sort; if (sortKey === k) sortDir = -sortDir; else { sortKey = k; sortDir = k === "name" || k === "owner" ? 1 : -1; } render(); }));
+    pane.querySelectorAll("[data-open]").forEach((el) => el.addEventListener("click", (e) => { e.preventDefault(); open(el.dataset.open, el.dataset.at || null); }));
+    pane.querySelectorAll("[data-fork]").forEach((b) => b.addEventListener("click", async () => {
+      try { const f = await api(`/api/plans/${b.dataset.fork}/fork`, { method: "POST", body: "{}" }); showToast(`Forked as “${f.name}”`); open(f.id); } catch (e) { showToast("Error: " + e.message); } }));
+    pane.querySelectorAll("[data-share]").forEach((b) => b.addEventListener("click", () => openShareModal(b.dataset.share, { onDone: load })));
+    pane.querySelectorAll("[data-arch]").forEach((b) => b.addEventListener("click", async () => {
+      try { await api(`/api/plans/${b.dataset.arch}`, { method: "PATCH", body: JSON.stringify({ archived: b.dataset.archived !== "1" }) }); load(); } catch (e) { showToast("Error: " + e.message); } }));
+    pane.querySelectorAll("[data-del]").forEach((b) => b.addEventListener("click", () => { const p = data.find((x) => x.id === b.dataset.del); if (p) openDeleteModal(p, load); }));
+  }
+  load();
+}
+// ── sharing ──
+function openShareModal(id, opts) {
+  opts = opts || {};
+  const { ov, close } = openOverlay(`<div class="modal-title">Share</div><div class="modal-body" id="share-body">Loading…</div>
+    <div class="modal-actions"><button type="button" data-act="done">Close</button></div>`, "560px");
+  const body = ov.querySelector("#share-body");
+  let p;
+  const VIS = [["private", "Only me"], ["org", "Anyone in Open Athena"], ["public", "Anyone with the link (no sign-in needed)"]];
+  const EDIT = [["owner", "Only me (and people listed below with edit)"], ["org", "Anyone in Open Athena"], ["public", "Anyone with the link, even signed out"]];
+  const RANK = { private: 0, owner: 0, org: 1, public: 2 };
+  const save = async (patch) => { try { p = { ...p, ...(await api(`/api/plans/${id}`, { method: "PATCH", body: JSON.stringify(patch) })), acl: p.acl }; render(); if (currentPlan && currentPlan.uuid === id && patch.name) { currentPlan.name = p.name; setStatus(`Plan: ${p.name}`, false); document.title = `${p.name} · plantt`; } if (remoteMeta && remoteMeta.id === id) Object.assign(remoteMeta, { visibility: p.visibility, editMode: p.editMode, name: p.name }); } catch (e) { showToast("Error: " + e.message); } };
+  function render() {
+    const link = location.origin + planPath(id);
+    const exportUrl = currentPlan && currentPlan.uuid === id ? location.origin + "/#" + encodeState() : null;
+    body.innerHTML = `
+      <label class="modal-field"><span>Name</span><input id="sh-name" type="text" value="${esc(p.name)}"></label>
+      <fieldset class="share-group"><legend>Who can see it</legend>${VIS.map(([v, l]) => `<label><input type="radio" name="sh-vis" value="${v}" ${p.visibility === v ? "checked" : ""}> ${l}</label>`).join("")}</fieldset>
+      <fieldset class="share-group"><legend>Who can edit it</legend>${EDIT.map(([v, l]) => `<label><input type="radio" name="sh-edit" value="${v}" ${p.editMode === v ? "checked" : ""} ${RANK[v] > RANK[p.visibility] ? "disabled title=\"Widen who can see it first\"" : ""}> ${l}</label>`).join("")}</fieldset>
+      <fieldset class="share-group"><legend>People</legend>
+        <div class="admin-row"><input type="text" id="sh-login" placeholder="GitHub login" style="flex:0 0 180px"><select id="sh-level"><option value="view">can view</option><option value="edit">can edit</option></select><button id="sh-add">Add</button></div>
+        ${(p.acl || []).map((a) => `<div class="admin-row" style="font-size:13px">${ghLink(a.login)} <select data-acl="${esc(a.login)}"><option value="view" ${a.level === "view" ? "selected" : ""}>can view</option><option value="edit" ${a.level === "edit" ? "selected" : ""}>can edit</option></select><button data-rm="${esc(a.login)}" title="Remove">✕</button></div>`).join("") || '<div style="font-size:12px;color:var(--muted)">Nobody yet.</div>'}
+      </fieldset>
+      <div class="link-row"><span>Link</span><input type="text" readonly value="${esc(link)}"><button data-copy="${esc(link)}">Copy</button></div>
+      ${exportUrl ? `<div class="link-row"><span title="Self-contained: carries the plan itself, opens without an account, no live sync">Export URL</span><input type="text" readonly value="${esc(exportUrl)}"><button data-copy="${esc(exportUrl)}">Copy</button></div>` : ""}`;
+    const nm = body.querySelector("#sh-name");
+    nm.addEventListener("change", () => { const v = nm.value.trim(); if (v && v !== p.name) save({ name: v }); });
+    if (opts.rename) { nm.focus(); nm.select(); opts.rename = false; }
+    body.querySelectorAll('input[name="sh-vis"]').forEach((r) => r.addEventListener("change", () => save({ visibility: r.value, editMode: RANK[p.editMode] > RANK[r.value] ? (r.value === "private" ? "owner" : r.value) : p.editMode })));
+    body.querySelectorAll('input[name="sh-edit"]').forEach((r) => r.addEventListener("change", () => save({ editMode: r.value })));
+    const add = async () => { const login = body.querySelector("#sh-login").value.trim().replace(/^@/, ""); if (!login) return;
+      try { p.acl = (await api(`/api/plans/${id}/acl/${encodeURIComponent(login)}`, { method: "PUT", body: JSON.stringify({ level: body.querySelector("#sh-level").value }) })).acl; render(); } catch (e) { showToast("Error: " + e.message); } };
+    body.querySelector("#sh-add").addEventListener("click", add);
+    body.querySelector("#sh-login").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); add(); } });
+    body.querySelectorAll("select[data-acl]").forEach((s) => s.addEventListener("change", async () => { try { p.acl = (await api(`/api/plans/${id}/acl/${encodeURIComponent(s.dataset.acl)}`, { method: "PUT", body: JSON.stringify({ level: s.value }) })).acl; render(); } catch (e) { showToast("Error: " + e.message); } }));
+    body.querySelectorAll("button[data-rm]").forEach((b) => b.addEventListener("click", async () => { try { p.acl = (await api(`/api/plans/${id}/acl/${encodeURIComponent(b.dataset.rm)}`, { method: "DELETE" })).acl; render(); } catch (e) { showToast("Error: " + e.message); } }));
+    body.querySelectorAll("button[data-copy]").forEach((b) => b.addEventListener("click", async () => { try { await navigator.clipboard.writeText(b.dataset.copy); b.textContent = "Copied"; setTimeout(() => { b.textContent = "Copy"; }, 1200); } catch (e) { showToast("Copy failed; select the text and copy it"); } }));
+  }
+  ov.addEventListener("pointerdown", (e) => { if (e.target === ov && opts.onDone) opts.onDone(); });
+  ov.querySelector('[data-act="done"]').addEventListener("click", () => { if (opts.onDone) opts.onDone(); });
+  api(`/api/plans/${id}`).then((meta) => { p = meta; render(); }).catch((e) => { body.textContent = "Error: " + e.message; });
+}
+function openDeleteModal(p, onDone) {
+  const { ov, close } = openOverlay(`<div class="modal-title">Delete “${esc(p.name)}”</div>
+    <div class="modal-body"><div>This removes the plan for everyone it is shared with. Type the plan’s name to confirm.</div><input type="text" id="del-name" placeholder="${esc(p.name)}"></div>
+    <div class="modal-actions"><button type="button" data-act="done">Cancel</button><button type="button" data-act="del" disabled>Delete</button></div>`, "440px");
+  const inp = ov.querySelector("#del-name"), btn = ov.querySelector('[data-act="del"]');
+  inp.addEventListener("input", () => { btn.disabled = inp.value.trim() !== p.name; }); inp.focus();
+  btn.addEventListener("click", async () => {
+    try { await api(`/api/plans/${p.id}`, { method: "DELETE", body: JSON.stringify({ confirmName: inp.value.trim() }) }); }
+    catch (e) { showToast("Error: " + e.message); return; }
+    close(); localStorage.removeItem(PLAN_PREFIX + p.id); showToast(`Deleted “${p.name}”`);
+    if (currentPlan && currentPlan.uuid === p.id) {
+      stopPolling(); remoteMeta = null; currentPlan = null;
+      const list = (await api("/api/plans").catch(() => ({ plans: [] }))).plans;
+      if (list.length) await openRemotePlan(list[0].id).catch(() => {});
+      else { const np = await api("/api/plans", { method: "POST", body: JSON.stringify({ name: "Untitled plan" }) }); const obj = createPlanObj(np.name, emptyModel(np.name)); obj.uuid = np.id; writePlanStore(obj); await openRemotePlan(np.id).catch(() => {}); }
+    }
+    if (onDone) onDone();
+  });
+}
+// window.plantt.plans.* in sync mode: the same verbs, answered by the server.
+const remotePlans = {
+  async list() { const r = await api("/api/plans"); return r.plans.map((p) => ({ uuid: p.id, name: p.name, owner: p.owner, level: p.level, visibility: p.visibility, editMode: p.editMode, forkedFrom: p.forkedFrom, archived: p.archived, createdAt: p.createdAt, lastModified: p.updatedAt, lastEditBy: p.lastEditBy, active: !!(currentPlan && currentPlan.uuid === p.id) })); },
+  async get(uuid) { const t = await api(`/api/plans/${uuid}/tree`); const n = t.head ? (await fetchNodes(uuid, [t.head]))[0] : null; return { uuid, name: t.name, model: n ? JSON.parse(n.body) : null }; },
+  async open(uuid) { try { await openRemotePlan(uuid, { quiet: true }); return { ok: true, uuid, name: currentPlan.name }; } catch (e) { return { ok: false, error: e.message }; } },
+  async duplicate(uuid, name, opts) { try { const p = await api(`/api/plans/${uuid}/fork`, { method: "POST", body: JSON.stringify({ name }) }); if (!opts || opts.open !== false) await openRemotePlan(p.id, { quiet: true }); return { ok: true, uuid: p.id, name: p.name }; } catch (e) { return { ok: false, error: e.message }; } },
+  async create(name, model, opts) {
+    const md = model || emptyModel(name);
+    try { migrateModel(md); validate(md); } catch (e) { return { ok: false, error: e.message }; }
+    try { const p = await api("/api/plans", { method: "POST", body: JSON.stringify({ name: name || "Untitled plan" }) });
+      const obj = createPlanObj(p.name, md); obj.uuid = p.id; writePlanStore(obj);
+      if (!opts || opts.open !== false) await openRemotePlan(p.id, { quiet: true }); else await pushWholeTree(p.id, obj);
+      return { ok: true, uuid: p.id, name: p.name }; } catch (e) { return { ok: false, error: e.message }; }
+  },
+};
+
 // ═══ Account: sign-in chip, denied notice, admin console ═══════════════════════
 // The API is same-origin (Pages Functions). Where there is none — a plain static build, or
 // `npm run dev` without `npm run dev:api` — whoami fails and the chip simply stays hidden.
-let me = null; // { login, avatar, role, via } when signed in
 const userBtn = document.getElementById("user-btn");
 const fmtWhen = (ts) => { if (!ts) return "—"; try { return new Date(ts).toLocaleString(); } catch (e) { return "—"; } };
 const ghLink = (login) => `<a href="https://github.com/${esc(login)}" target="_blank" rel="noopener">@${esc(login)}</a>`;
@@ -4524,7 +4976,7 @@ function renderUserChip() {
 function signIn() { location.href = "/auth/github?next=" + encodeURIComponent(location.pathname + location.search + location.hash); }
 async function signOut() {
   try { await fetch("/auth/logout", { method: "POST" }); } catch (e) {}
-  me = null; renderUserChip(); showToast("Signed out");
+  location.replace("/"); // back to local mode with a clean slate
 }
 async function loadWhoami() {
   try {
@@ -4533,6 +4985,7 @@ async function loadWhoami() {
     else if (r.ok) me = await r.json();
     else return;                                   // API error → leave the chip hidden
     renderUserChip();
+    startSync();
   } catch (e) { /* no API at this origin → local-only mode */ }
 }
 // JSON fetch that turns API errors into exceptions with the server's message.
