@@ -2,7 +2,7 @@
 
 Making sure that compute capacity is appropriately used and that ambitious AI projects aren't blocked by preventable delays isn't easy, and planning tools are woefully hard to manipulate, read, and keep up to date (and ugly). Plantt addresses all of these with a lightweight LLM-driveable (via a skill) Gantt chart generator and editor. Easily share plans with collaborators, who can make their own changes and share them back with just a URL. Front-end only, to make both privacy and sharing natural.
 
-**Live:** http://openathena.ai/plantt/
+**Live:** https://plantt.oa.dev/ (the old address, openathena.ai/plantt, redirects and offers to move your locally saved plans)
 
 ![plantt — example project plan](docs/screenshot.png)
 
@@ -22,15 +22,29 @@ Making sure that compute capacity is appropriately used and that ambitious AI pr
 - Dependency connection with a violations highlighted.
 
 
+## Accounts, sharing, forking (optional)
+
+Signed out, plantt is exactly the front-end-only app described above: plans live in your browser
+and travel as URLs. Signed in (GitHub, Open Athena members or an allowlist), every plan syncs to
+the server, and you get a plan index, sharing (private / org / anyone with the link; view or
+edit), forking (a deep copy that keeps the whole undo tree), archive/delete, and an audit log.
+Two people editing one plan produce two branches under a common parent, never a lost edit.
+Design notes: [`docs/multiuser-plan.md`](docs/multiuser-plan.md).
+
 ## Develop
 
 ```bash
 npm install
-npm run dev      # http://localhost:5173
-npm run build    # → dist/  (deployed to GitHub Pages by .github/workflows/deploy.yml)
+npm run dev      # http://localhost:5173 — front end (Vite, hot reload)
+npm run dev:api  # http://127.0.0.1:8788 — Pages Functions + local D1 (Vite proxies /api and /auth here)
+npm run db:local # apply migrations to the local D1
+npm run build    # → dist/  (deployed to Cloudflare Pages by .github/workflows/cloudflare.yml)
 ```
 
-The app is plain ES modules bundled by Vite for hot reload; `src/main.js` is the whole app.
+The app is plain ES modules bundled by Vite for hot reload; `src/main.js` is the whole front end,
+`src/ops.js` the shared plan ops, `functions/` the API (Cloudflare Pages Functions + D1). Sign-in
+locally needs a `.dev.vars` (gitignored) with `SESSION_SECRET`, `GITHUB_CLIENT_ID`,
+`GITHUB_CLIENT_SECRET` and `PUBLIC_ORIGIN=http://localhost:5173`.
 
 
 ## Remote control (optional)

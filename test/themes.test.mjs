@@ -1,5 +1,5 @@
 // Anti-drift test for the theme registry. Pure Node. Run via `npm test`.
-import { BUILTIN_THEMES, TOKENS, TOKEN_NAMES, DEFAULT_THEME_ID, validateTheme } from "../src/themes.js";
+import { BUILTIN_THEMES, TOKENS, TOKEN_NAMES, DEFAULT_THEME_ID, DEFAULT_DARK_THEME_ID, validateTheme } from "../src/themes.js";
 
 let pass = 0, fail = 0;
 const ok = (name, cond, extra = "") => { cond ? pass++ : fail++; console.log(`${cond ? "✅" : "❌"} ${name}${extra ? "  " + extra : ""}`); };
@@ -22,6 +22,7 @@ ok("theme ids are unique", new Set(ids).size === ids.length, ids.join(", "));
 
 // the default exists
 ok(`DEFAULT_THEME_ID "${DEFAULT_THEME_ID}" exists`, ids.includes(DEFAULT_THEME_ID));
+ok(`DEFAULT_DARK_THEME_ID "${DEFAULT_DARK_THEME_ID}" exists and is dark`, BUILTIN_THEMES.some((t) => t.id === DEFAULT_DARK_THEME_ID && t.appearance === "dark"));
 
 // validateTheme rejects bad input
 ok("validateTheme rejects missing tokens", !validateTheme({ id: "x", name: "X", tokens: {} }).ok);

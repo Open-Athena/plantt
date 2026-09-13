@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>plantt has moved</title>
+<meta name="robots" content="noindex">
+<style>
+  body { font: 17px/1.55 Georgia, "Times New Roman", serif; color: #222; max-width: 38em; margin: 5em auto; padding: 0 1.5em; }
+  h1 { font-weight: normal; font-size: 1.5em; }
+  a { color: inherit; }
+  button { font: inherit; padding: .4em 1em; }
+  .muted { color: #666; font-size: .9em; }
+</style>
+<h1>plantt has moved to <a href="https://plantt.oa.dev/">plantt.oa.dev</a></h1>
+<p id="msg">Redirecting…</p>
+<!-- A plain top-level form POST: the only cross-origin channel that carries this origin's
+     localStorage without a browser prompt (iframes get partitioned storage). -->
+<form id="f" method="post" action="https://plantt.oa.dev/api/legacy" hidden>
+  <input type="hidden" name="items">
+  <input type="hidden" name="hash">
+  <p><button type="submit">Move my plans to plantt.oa.dev</button>
+     &nbsp; <a id="skip" href="https://plantt.oa.dev/">Skip, just take me there</a></p>
+  <p class="muted">Saved plans live in this browser's storage for this address only. Moving copies
+     them to the new address; nothing here is deleted.</p>
+</form>
+<script>
+(function () {
+  var NEW = "https://plantt.oa.dev/";
+  // Preserve ?agent=1 etc. and, above all, the #fragment: exported plan links live there.
+  var go = function () { location.replace(NEW + location.search + location.hash); };
+  var PREFIX = /^(tg-|tufte-gantt-|plantt[-_])/, items = {}, plans = 0;
+  try {
+    for (var i = 0; i < localStorage.length; i++) {
+      var k = localStorage.key(i);
+      if (PREFIX.test(k)) { items[k] = localStorage.getItem(k); if (k.indexOf("tg-plan-") === 0) plans++; }
+    }
+    if (!plans || localStorage.getItem("tg-handoff-done")) return go();
+  } catch (e) { return go(); }
+  var f = document.getElementById("f");
+  document.getElementById("msg").textContent =
+    "This browser holds " + plans + " saved plan" + (plans === 1 ? "" : "s") + " from the old address.";
+  f.items.value = JSON.stringify(items);
+  f.hash.value = location.hash;
+  f.hidden = false;
+  f.addEventListener("submit", function () { try { localStorage.setItem("tg-handoff-done", "1"); } catch (e) {} });
+  document.getElementById("skip").addEventListener("click", function (e) { e.preventDefault(); go(); });
+})();
+</script>

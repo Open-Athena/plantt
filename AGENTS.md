@@ -4,9 +4,11 @@ Guidance for AI agents (and humans) working in this repo.
 
 ## What plantt is
 
-A single-page, front-end-only Gantt planner for AI/compute roadmaps. The entire app is
-`src/main.js` (an IIFE bundled by Vite); there is **no backend**. A plan is one JSON
-document; the running app is the source of truth and can be driven remotely.
+A single-page Gantt planner for AI/compute roadmaps. The front end is `src/main.js` (an IIFE
+bundled by Vite). Signed out it is front-end-only (localStorage + URLs). Signed in, plans sync
+to a small backend in `functions/` (Cloudflare Pages Functions + D1, deployed to plantt.oa.dev);
+see `docs/multiuser-plan.md` for the data model, sharing rules and sync protocol. A plan is one
+JSON document; the running app is the source of truth and can be driven remotely.
 
 ## The plan data model has ONE source of truth: `src/schema.js`
 
@@ -23,8 +25,9 @@ keep `src/schema.js` honest*.
 ### If you change the model, the DSL, or the op vocabulary — do ALL of this:
 
 1. Update `src/schema.js` (`SCHEMA` / `OPS` / `EXAMPLE`, and `validate()` if invariants changed).
-2. If you added/removed/renamed an `apply` op, update `_applyOp()` in `src/main.js`. The op set in
-   `OPS` must exactly equal the `case` labels in `_applyOp()` — the test enforces this.
+2. If you added/removed/renamed an `apply` op, update `_applyOp()` in `src/ops.js` (pure, shared by
+   the browser and the Worker). The op set in `OPS` must exactly equal the `case` labels in
+   `_applyOp()` — the test enforces this.
 3. Update the "Plan model schema" + op tables in `.claude/skills/plantt-remote/SKILL.md` to match.
 4. Run **`npm test`** (it must pass) and **`npm run build`** (must succeed).
 
@@ -55,6 +58,16 @@ must NOT name it `id` — `enqueue()` overwrites `cmd.id` with the command count
 `themeId`). The
 `.claude/skills/plantt-remote/relay.mjs` localhost bridge exposes these over HTTP. Keep the relay
 endpoints, the poller `run()` switch in `src/main.js`, and `window.plantt` in sync with each other.
+
+## Backend (functions/)
+
+- `functions/_lib/auth.js` — HMAC session cookie, sign-in policy (ADMIN_LOGINS | allowed_users |
+  cached org membership), audit helpers. `functions/_lib/plans.js` — access rules (`levelFor`).
+- Schema changes are numbered files in `migrations/`; CI applies them before every deploy
+  (`plantt` for production, `plantt-preview` for PR previews). Never edit an applied migration.
+- The undo tree on the server is content-addressed: `plan_nodes` rows keyed by the client's tree
+  hash, snapshots in `blobs` by sha256 (D1 caps a row at 2 MB — never inline snapshots).
+- Local dev: `npm run dev` + `npm run dev:api` (needs `.dev.vars`; see README).
 
 ## Conventions
 

@@ -155,7 +155,9 @@ export const BUILTIN_THEMES = [
   }, ["#222222", "#555555", "#777777", "#999999", "#444444"]),
 ];
 
-export const DEFAULT_THEME_ID = "tufte"; // both light & dark slots default here
+export const DEFAULT_THEME_ID = "tufte";      // default for the light slot
+export const DEFAULT_DARK_THEME_ID = "nord";  // default for the dark slot
+export const defaultThemeFor = (slot) => (slot === "dark" ? DEFAULT_DARK_THEME_ID : DEFAULT_THEME_ID);
 
 // Validate a theme object (used for imports). Returns {ok, error}.
 export function validateTheme(t) {

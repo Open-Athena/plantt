@@ -470,3 +470,43 @@ body.compact-mode #chart-container { background: var(--surface); padding: 18px; 
 }
 #ui-tip.visible { opacity: 1; }
 @media print { #ui-tip { display: none !important; } }
+
+/* ─── account chip + admin console ─── */
+#user-btn { margin-left: 6px; }
+#user-btn .chip-avatar { width: 16px; height: 16px; border-radius: 50%; vertical-align: -3px; margin-right: 5px; }
+.admin-tabs { display: flex; gap: 6px; margin-bottom: 8px; }
+.admin-tabs button { font: inherit; font-size: 12px; padding: 3px 10px; border: 1px solid var(--border); background: var(--surface); color: var(--fg); border-radius: 4px; cursor: pointer; }
+.admin-tabs button.on { border-color: var(--dep-hl); color: var(--fg); font-weight: 600; }
+.admin-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.admin-table th, .admin-table td { text-align: left; padding: 3px 6px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.admin-table th { font-weight: 600; color: var(--muted, #777); }
+.admin-table td.mono { font-family: var(--font-mono); font-size: 11px; }
+.admin-table button { font: inherit; font-size: 11px; padding: 1px 7px; }
+.admin-scroll { max-height: 52vh; overflow: auto; }
+.admin-row { display: flex; gap: 6px; align-items: center; margin: 6px 0; }
+.admin-row input[type="text"] { flex: 1; }
+.chip-avatar-sm { width: 14px; height: 14px; border-radius: 50%; vertical-align: -2px; margin-right: 4px; }
+#sync-badge { position: fixed; bottom: 10px; left: 10px; z-index: 50; font: 11px/1.4 ui-monospace, monospace; color: var(--muted); opacity: .85; pointer-events: none; }
+#sync-badge.bad { color: #c0392b; }
+#sync-badge.busy { opacity: .6; }
+.plan-link { cursor: pointer; text-decoration: underline dotted; }
+.admin-table tr.current td { background: color-mix(in srgb, var(--dep-hl) 10%, transparent); }
+.admin-table th.sortable { cursor: pointer; user-select: none; }
+.share-group { border: 1px solid var(--border); border-radius: 4px; padding: 8px 10px; }
+.share-group legend { font-size: 12px; color: var(--muted); padding: 0 4px; }
+.share-group label { display: block; font-size: 13px; margin: 2px 0; }
+.link-row { display: flex; gap: 6px; align-items: center; font-size: 12px; }
+.link-row input[type="text"] { flex: 1; font-family: var(--font-mono); font-size: 11px; }
+/* Links and small buttons inside modals follow the theme: text-coloured, underlined links;
+   surface-coloured buttons (browser defaults were blue links and white buttons in dark themes). */
+#modal a { color: inherit; text-decoration: underline; text-underline-offset: 2px; text-decoration-color: var(--muted); }
+#modal a:hover { text-decoration-color: currentColor; }
+.admin-table button, .admin-row button, .link-row button, #modal .share-group button {
+  font: inherit; font-size: 11px; cursor: pointer; padding: 2px 8px;
+  border: 1px solid var(--border); border-radius: 3px; background: var(--surface); color: var(--heading);
+}
+.admin-table button:hover:not(:disabled), .admin-row button:hover, .link-row button:hover { border-color: var(--dep-hl); }
+.admin-table button:disabled { opacity: 0.4; cursor: default; }
+.admin-row input[type="text"], .admin-row select, #modal .share-group select {
+  font: inherit; font-size: 12px; padding: 3px 6px; border: 1px solid var(--border); border-radius: 3px; background: var(--bg); color: var(--fg);
+}

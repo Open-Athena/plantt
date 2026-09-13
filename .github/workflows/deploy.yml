@@ -1,8 +1,13 @@
-name: Deploy to GitHub Pages
+name: Deploy redirect to GitHub Pages
 
+# plantt moved to Cloudflare Pages (plantt.oa.dev; see .github/workflows/cloudflare.yml).
+# openathena.ai/plantt/ now serves a tiny redirect that preserves the #fragment, so old
+# exported plan links keep working, plus bridge.html, which hands this origin's saved
+# plans to the new one (localStorage is per origin).
 on:
   push:
     branches: [main]
+    paths: ["redirect/**", ".github/workflows/deploy.yml"]
   workflow_dispatch:
 
 permissions:
@@ -10,34 +15,21 @@ permissions:
   pages: write
   id-token: write
 
-# Allow one concurrent deployment; newer pushes supersede in-flight ones.
 concurrency:
   group: pages
   cancel-in-progress: true
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-      - run: npm ci
-      - run: npm test          # schema/op consistency — fails the deploy on model drift
-      - run: npm run build
-      - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: dist
-
   deploy:
-    needs: build
     runs-on: ubuntu-latest
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
+      - uses: actions/checkout@v4
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: redirect
       - id: deployment
         uses: actions/deploy-pages@v4
