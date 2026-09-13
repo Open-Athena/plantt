@@ -1,6 +1,6 @@
 import { compressToEncodedURIComponent, decompressFromEncodedURIComponent } from "lz-string";
 import { validate, SCHEMA, OPS, EXAMPLE } from "./schema.js";
-import { BUILTIN_THEMES, TOKENS, TOKEN_NAMES, DEFAULT_THEME_ID, validateTheme } from "./themes.js";
+import { BUILTIN_THEMES, TOKENS, TOKEN_NAMES, DEFAULT_THEME_ID, DEFAULT_DARK_THEME_ID, defaultThemeFor, validateTheme } from "./themes.js";
 import { _findItem, _allItems, _applyOp, _summarizeOps } from "./ops.js";
 
 (function () {
@@ -3763,7 +3763,7 @@ function loadSelection() {
   let s = null;
   try { s = JSON.parse(localStorage.getItem(THEME_SELECTION_KEY) || "null"); } catch (e) { /* ignore */ }
   if (!s || typeof s !== "object") s = {};
-  return { light: s.light || DEFAULT_THEME_ID, dark: s.dark || DEFAULT_THEME_ID };
+  return { light: s.light || DEFAULT_THEME_ID, dark: s.dark || DEFAULT_DARK_THEME_ID };
 }
 let themeSelection = loadSelection();
 function saveSelection() { localStorage.setItem(THEME_SELECTION_KEY, JSON.stringify(themeSelection)); }
@@ -4305,7 +4305,7 @@ window.plantt = {
       if (i < 0) return { ok: false, error: "no custom theme: " + id };
       custom.splice(i, 1); saveCustomThemes(custom);
       let changed = false;
-      for (const slot of ["light", "dark"]) if (themeSelection[slot] === id) { themeSelection[slot] = DEFAULT_THEME_ID; changed = true; }
+      for (const slot of ["light", "dark"]) if (themeSelection[slot] === id) { themeSelection[slot] = defaultThemeFor(slot); changed = true; }
       if (changed) saveSelection();
       applyActiveTheme();
       return { ok: true };
