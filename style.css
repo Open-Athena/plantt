@@ -497,3 +497,16 @@ body.compact-mode #chart-container { background: var(--surface); padding: 18px; 
 .share-group label { display: block; font-size: 13px; margin: 2px 0; }
 .link-row { display: flex; gap: 6px; align-items: center; font-size: 12px; }
 .link-row input[type="text"] { flex: 1; font-family: var(--font-mono); font-size: 11px; }
+/* Links and small buttons inside modals follow the theme: text-coloured, underlined links;
+   surface-coloured buttons (browser defaults were blue links and white buttons in dark themes). */
+#modal a { color: inherit; text-decoration: underline; text-underline-offset: 2px; text-decoration-color: var(--muted); }
+#modal a:hover { text-decoration-color: currentColor; }
+.admin-table button, .admin-row button, .link-row button, #modal .share-group button {
+  font: inherit; font-size: 11px; cursor: pointer; padding: 2px 8px;
+  border: 1px solid var(--border); border-radius: 3px; background: var(--surface); color: var(--heading);
+}
+.admin-table button:hover:not(:disabled), .admin-row button:hover, .link-row button:hover { border-color: var(--dep-hl); }
+.admin-table button:disabled { opacity: 0.4; cursor: default; }
+.admin-row input[type="text"], .admin-row select, #modal .share-group select {
+  font: inherit; font-size: 12px; padding: 3px 6px; border: 1px solid var(--border); border-radius: 3px; background: var(--bg); color: var(--fg);
+}
