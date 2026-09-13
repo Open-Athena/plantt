@@ -28,7 +28,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22   # wrangler 4 needs Node ≥ 22
           cache: npm
       - run: npm ci
       - run: npm test          # schema/op consistency — fails the deploy on model drift
