@@ -4865,14 +4865,39 @@ function openPlansIndex() {
     const th = (key, label) => `<th class="sortable" data-sort="${key}">${label}${sortKey === key ? (sortDir < 0 ? " ▾" : " ▴") : ""}</th>`;
     pane.innerHTML = `<table class="admin-table"><tr>${th("name", "Name")}${th("owner", "Owner")}${th("updatedAt", "Last edit")}<th>Forked from</th><th>Shared with</th><th></th></tr>` +
       rows.map((p) => { const cur = currentPlan && currentPlan.uuid === p.id; const mine = p.level === "manage";
-        return `<tr class="${cur ? "current" : ""}"><td><span class="plan-link" data-open="${esc(p.id)}">${esc(p.name)}</span>${cur ? ' <b style="font-size:11px">open</b>' : ""}${p.archived ? ' <span style="color:var(--muted);font-size:11px">archived</span>' : ""}</td>
+        return `<tr class="${cur ? "current" : ""}"><td><span class="plan-link" data-open="${esc(p.id)}" ${mine ? `data-rename="${esc(p.id)}" title="Click to open \u00b7 double-click to rename"` : ""}>${esc(p.name)}</span>${cur ? ' <b style="font-size:11px">open</b>' : ""}${p.archived ? ' <span style="color:var(--muted);font-size:11px">archived</span>' : ""}</td>
           <td>${p.ownerAvatar ? `<img class="chip-avatar-sm" src="${esc(p.ownerAvatar)}" alt="">` : ""}${ghLink(p.owner)}</td>
           <td title="${esc(fmtWhen(p.updatedAt))}">${esc(fmtAgo(p.updatedAt))}${p.lastEditBy ? ` by @${esc(p.lastEditBy)}` : ""}</td>
           <td>${forkedFromHtml(p)}</td><td>${esc(sharedWithLabel(p))}</td>
           <td style="white-space:nowrap"><button data-open="${esc(p.id)}" ${cur ? "disabled" : ""}>Open</button> <button data-fork="${esc(p.id)}">Fork</button>${mine ? ` <button data-share="${esc(p.id)}">Share…</button> <button data-arch="${esc(p.id)}" data-archived="${p.archived ? 1 : 0}">${p.archived ? "Unarchive" : "Archive"}</button> <button data-del="${esc(p.id)}" title="Delete…">✕</button>` : ""}</td></tr>`; }).join("") +
       `</table>${rows.length ? "" : '<div class="plan-empty">No plans here.</div>'}`;
     pane.querySelectorAll("[data-sort]").forEach((h) => h.addEventListener("click", () => { const k = h.dataset.sort; if (sortKey === k) sortDir = -sortDir; else { sortKey = k; sortDir = k === "name" || k === "owner" ? 1 : -1; } render(); }));
-    pane.querySelectorAll("[data-open]").forEach((el) => el.addEventListener("click", (e) => { e.preventDefault(); open(el.dataset.open, el.dataset.at || null); }));
+    let clickTimer = null;
+    pane.querySelectorAll("[data-open]").forEach((el) => el.addEventListener("click", (e) => {
+      e.preventDefault();
+      if (!el.dataset.rename) { open(el.dataset.open, el.dataset.at || null); return; }
+      clearTimeout(clickTimer); clickTimer = setTimeout(() => open(el.dataset.open, null), 250); // leave room for a double-click
+    }));
+    // Owners rename in place: double-click the name, Enter saves, Escape cancels.
+    pane.querySelectorAll("[data-rename]").forEach((el) => el.addEventListener("dblclick", (e) => {
+      e.preventDefault(); clearTimeout(clickTimer);
+      const id = el.dataset.rename, p = data.find((x) => x.id === id); if (!p) return;
+      const inp = document.createElement("input"); inp.type = "text"; inp.value = p.name; inp.style.width = "95%"; inp.className = "plan-name";
+      el.replaceWith(inp); inp.focus(); inp.select();
+      let done = false;
+      const finish = async (commit) => {
+        if (done) return; done = true;
+        const name = inp.value.trim();
+        if (commit && name && name !== p.name) {
+          try { await api(`/api/plans/${id}`, { method: "PATCH", body: JSON.stringify({ name }) }); p.name = name;
+            if (currentPlan && currentPlan.uuid === id) { currentPlan.name = name; if (remoteMeta && remoteMeta.id === id) remoteMeta.name = name; setStatus(`Plan: ${name}`, false); document.title = `${name} \u00b7 plantt`; schedulePersist(); } }
+          catch (err) { showToast("Rename failed: " + err.message); }
+        }
+        render();
+      };
+      inp.addEventListener("keydown", (ev) => { if (ev.key === "Enter") { ev.preventDefault(); finish(true); } else if (ev.key === "Escape") { ev.preventDefault(); ev.stopPropagation(); finish(false); } });
+      inp.addEventListener("blur", () => finish(true));
+    }));
     pane.querySelectorAll("[data-fork]").forEach((b) => b.addEventListener("click", async () => {
       try { const f = await api(`/api/plans/${b.dataset.fork}/fork`, { method: "POST", body: "{}" }); showToast(`Forked as “${f.name}”`); open(f.id); } catch (e) { showToast("Error: " + e.message); } }));
     pane.querySelectorAll("[data-share]").forEach((b) => b.addEventListener("click", () => openShareModal(b.dataset.share, { onDone: load })));
