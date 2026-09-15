@@ -5010,6 +5010,12 @@ async function loadWhoami() {
     else if (r.ok) me = await r.json();
     else return;                                   // API error → leave the chip hidden
     renderUserChip();
+    if (!me && isUntouchedDefault({ model, history: serializeHistory() })) {
+      newPlanAndSwitch("Untitled plan", emptyModel("Untitled plan"));
+      panel.classList.add("open");
+      setTimeout(() => cm.refresh(), 260);
+      adjustChartPadding();
+    }
     startSync();
   } catch (e) { /* no API at this origin → local-only mode */ }
 }

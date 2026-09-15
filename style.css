@@ -54,9 +54,16 @@ body { font-family: var(--font-serif);
 }
 #status-msg.error { color: var(--danger); }
 #status-msg.hidden { display: none; }
-#close-btn { background: none; border: none; cursor: pointer; font-size: 16px;
-  color: var(--muted); padding: 0 4px; line-height: 1; }
-#close-btn:hover { color: var(--heading); }
+#close-btn { background: var(--surface); border: 1px solid var(--border); border-radius: 3px; cursor: pointer;
+  font-family: var(--font-mono); font-size: 13px; line-height: 1;
+  color: var(--heading); height: 24px; padding: 0 7px; box-sizing: border-box;
+  display: inline-flex; align-items: center; justify-content: center; gap: 5px; }
+#close-btn:hover { filter: brightness(0.97); border-color: var(--dep-hl); }
+#close-btn kbd, #help-btn kbd {
+  font-family: var(--font-mono); font-size: 10px; color: var(--muted);
+  background: var(--bg); border: 1px solid var(--border); border-radius: 2px;
+  padding: 0 3px; line-height: 1.5; pointer-events: none;
+}
 
 #editor-wrap { flex: 1; overflow: hidden; }
 
