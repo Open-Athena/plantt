@@ -1774,7 +1774,7 @@ function recordChange(desc) {
   if (sameJSON(snap, cur.snapshot)) return; // no-op (delta 0, identical save, etc.)
   const node = { id: history.nextId++, parentId: cur.id, childIds: [], activeChild: null,
     snapshot: snap, change: desc, summary: summarize(desc), ts: Date.now(),
-    hash: hashOf(snap, cur.hash) };
+    hash: hashOf(snap, cur.hash), author: me ? me.login : null };
   history.nodes.set(node.id, node);
   history.byHash.set(node.hash, node.id);
   cur.childIds.push(node.id);
@@ -2258,10 +2258,11 @@ function renderViz() {
   const scroll = vizEl.querySelector("#viz-scroll");
   const { ids, row, lane } = layoutHistory();
   const ROW = 30, LANE = 22, PAD = 22, R = 8;
-  let maxLane = 0, maxLabel = 0;
-  for (const id of ids) { maxLane = Math.max(maxLane, lane.get(id)); maxLabel = Math.max(maxLabel, history.nodes.get(id).summary.length); }
+  let maxLane = 0, maxLabel = 0, hasAuthor = false;
+  for (const id of ids) { maxLane = Math.max(maxLane, lane.get(id)); maxLabel = Math.max(maxLabel, history.nodes.get(id).summary.length); if (history.nodes.get(id).author) hasAuthor = true; }
   const railsW = (maxLane + 1) * LANE;
-  const labelX = PAD + railsW + 12;
+  const avGap = hasAuthor ? 20 : 0;
+  const labelX = PAD + railsW + 12 + avGap;
   const W = labelX + maxLabel * 6.3 + PAD;
   const H = PAD * 2 + Math.max(0, ids.length - 1) * ROW + R * 2;
   const X = (id) => PAD + lane.get(id) * LANE + R;
@@ -2280,18 +2281,32 @@ function renderViz() {
       ? `<line x1="${px}" y1="${py}" x2="${cx}" y2="${cy}" ${st}/>`
       : `<path d="M ${px} ${py} H ${cx} V ${cy}" ${st}/>`;
   }
+  let defs = "";
+  const authorsSeen = new Set();
+  for (const id of ids) {
+    const n = history.nodes.get(id);
+    if (n.author && !authorsSeen.has(n.author)) {
+      authorsSeen.add(n.author);
+      defs += `<clipPath id="av-clip-${esc(n.author)}"><circle cx="0" cy="0" r="7"/></clipPath>`;
+    }
+  }
   for (const id of ids) {
     const n = history.nodes.get(id);
     const st = verbStyle(n.change.verb);
     const isCur = id === history.currentId;
     const dash = n.detached ? ' stroke-dasharray="2,2"' : "";
+    const avX = labelX - 18;
+    const avatarSvg = n.author
+      ? `<g transform="translate(${avX},${Y(id)})"><image href="https://avatars.githubusercontent.com/${encodeURIComponent(n.author)}?s=32" x="-7" y="-7" width="14" height="14" clip-path="url(#av-clip-${esc(n.author)})"/><circle cx="0" cy="0" r="7" fill="none" stroke="${HIST_LINE}" stroke-width="0.5"/></g>`
+      : "";
     nodes += `<g class="viz-node" data-id="${id}" style="cursor:pointer">` +
       `<rect x="0" y="${Y(id) - ROW / 2}" width="${W}" height="${ROW}" fill="transparent"/>` +
       `<circle cx="${X(id)}" cy="${Y(id)}" r="${R}" fill="${st.color}" stroke="${isCur ? TEXT : BACKGROUND}" stroke-width="${isCur ? 3 : 1.5}"${dash}/>` +
+      `${avatarSvg}` +
       `<text x="${labelX}" y="${Y(id) + 4}" class="viz-label" font-weight="${isCur ? "700" : "400"}">${(n.detached ? "⊘ " : "") + esc(n.summary)}</text>` +
       `</g>`;
   }
-  scroll.innerHTML = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">${edges}${nodes}</svg>`;
+  scroll.innerHTML = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}"><defs>${defs}</defs>${edges}${nodes}</svg>`;
   scroll.querySelectorAll(".viz-node").forEach((g) => {
     const id = +g.getAttribute("data-id");
     g.addEventListener("click", () => jumpTo(id, "Scrub"));
@@ -2320,7 +2335,11 @@ function diffLines(d) {
 function vizNodeDiffHtml(id) {
   const n = history.nodes.get(id);
   const parent = n.parentId != null ? history.nodes.get(n.parentId) : null;
-  const header = `<div class="vt-h">${esc(n.summary)}</div>`;
+  const authorHtml = n.author
+    ? `<div class="vt-author"><img class="vt-avatar" src="https://avatars.githubusercontent.com/${encodeURIComponent(n.author)}?s=32" alt="">@${esc(n.author)}</div>`
+    : "";
+  const when = n.ts ? `<div class="vt-time">${new Date(n.ts).toLocaleString()}</div>` : "";
+  const header = `<div class="vt-h">${esc(n.summary)}</div>${authorHtml}${when}`;
   if (!parent)
     return header + `<div class="vt-note">${n.detached ? "Detached — no shared ancestor in this tree" : "Root — initial state"}</div>`;
   const lines = diffLines(diffModel(parent.snapshot, n.snapshot));
