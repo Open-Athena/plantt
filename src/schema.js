@@ -86,6 +86,7 @@ export const SCHEMA = {
     tooltip: "markdown? — shown on hover",
     deps: "array? of item names — drawn as dependency arrows (red if violated)",
     assigned: "string? — assignee name or @github-username (shows avatar when toggled on with @)",
+    status: "'done'|'cancelled'? — manual status override; omit or null for open. Ignored when `link` points to a GitHub issue/PR (GitHub state wins).",
   },
   milestone: {
     name: "string — unique across all tasks AND milestones",

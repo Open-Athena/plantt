@@ -169,6 +169,16 @@ body.compact-mode #chart-container { background: var(--surface); padding: 18px; 
   font-family: var(--font-mono); font-size: 11px; color: var(--muted); line-height: 1.5;
   border-top: 1px solid var(--border); padding-top: 8px; white-space: pre-wrap; word-break: break-word;
 }
+.status-btns { display: flex; gap: 4px; }
+.status-btn {
+  font-family: var(--font-mono); font-size: 11px; cursor: pointer;
+  border: 1px solid var(--border); border-radius: 3px; padding: 3px 10px;
+  background: var(--bg); color: var(--muted);
+}
+.status-btn:hover { border-color: var(--dep-hl); }
+.status-btn.active { background: var(--surface); color: var(--heading); border-color: var(--dep-hl); font-weight: 600; }
+.status-btn[data-st="done"].active { color: #3fb950; }
+.status-btn[data-st="cancelled"].active { color: #f85149; }
 .gh-issue-card {
   display: flex; align-items: center; gap: 8px; padding: 6px 10px; margin-top: 4px;
   border: 1px solid var(--border); border-radius: 4px; background: var(--surface); font-size: 12px;

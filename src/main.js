@@ -1660,7 +1660,7 @@ function buildDragChange(ds) {
   return { source: "drag", verb: "move", targetType: "task", targetName: name, details: { deltaDays: delta, affectedCount: affected } };
 }
 
-const TASK_FIELDS = ["start", "end", "significance", "cluster", "chips", "link", "tooltip", "deps", "assigned"];
+const TASK_FIELDS = ["start", "end", "significance", "cluster", "chips", "link", "tooltip", "deps", "assigned", "status"];
 const MS_FIELDS = ["date", "emoji", "line", "tooltip", "deps", "assigned"];
 function changedFields(a, b, keys) {
   const out = [];
@@ -3228,17 +3228,35 @@ function wireGhIssueCard() {
   refresh();
 }
 
+// Status button group in the task modal: toggle between open/done/cancelled.
+// Hidden when a GH issue link is present (GitHub is the source of truth).
+function wireStatusButtons() {
+  const row = modalEl.querySelector("#m-status-row");
+  const linkEl = modalEl.querySelector("#m-link");
+  if (!row || !linkEl) return;
+  const btns = row.querySelectorAll(".status-btn");
+  btns.forEach(btn => btn.addEventListener("click", () => {
+    btns.forEach(b => b.classList.remove("active"));
+    btn.classList.add("active");
+  }));
+  const syncVis = () => { row.style.display = parseGhUrl(linkEl.value.trim()) ? "none" : ""; };
+  linkEl.addEventListener("input", syncVis);
+  linkEl.addEventListener("change", syncVis);
+  syncVis();
+}
+
 // Check cached GH issue/PR state for chart decorations. Returns "done", "cancelled", or null.
 function ghIssueState(t) {
-  if (!t.link) return null;
-  const gh = parseGhUrl(t.link);
-  if (!gh) return null;
-  const key = `${gh.owner}/${gh.repo}/${gh.number}`;
-  const issue = _ghIssueCache[key];
-  if (!issue || issue.state === "open") return null;
-  if (issue.pull_request && issue.pull_request.merged_at) return "done";
-  if (issue.state_reason === "not_planned") return "cancelled";
-  return "done";
+  const gh = t.link ? parseGhUrl(t.link) : null;
+  if (gh) {
+    const key = `${gh.owner}/${gh.repo}/${gh.number}`;
+    const issue = _ghIssueCache[key];
+    if (!issue || issue.state === "open") return null;
+    if (issue.pull_request && issue.pull_request.merged_at) return "done";
+    if (issue.state_reason === "not_planned") return "cancelled";
+    return "done";
+  }
+  return t.status || null;
 }
 
 // Kick off background fetch for all tasks with GH links so the cache populates.
@@ -3311,6 +3329,11 @@ function openTaskModal(wsIndex, taskIndex) {
     field("Assigned to", `<input id="m-assigned" type="text" placeholder="name or @github" value="${esc(t.assigned || "")}">`) +
     field("Link", `<input id="m-link" type="url" placeholder="https://github.com/…" value="${esc(t.link || "")}">`) +
     `<div id="gh-issue-slot"></div>` +
+    `<div id="m-status-row" class="modal-field"><span>Status</span><div class="status-btns">` +
+      `<button type="button" class="status-btn${!t.status ? " active" : ""}" data-st="">Open</button>` +
+      `<button type="button" class="status-btn${t.status === "done" ? " active" : ""}" data-st="done">Done ✓</button>` +
+      `<button type="button" class="status-btn${t.status === "cancelled" ? " active" : ""}" data-st="cancelled">Cancelled</button>` +
+    `</div></div>` +
     field("Tooltip (markdown)", `<textarea id="m-tip" rows="6">${esc(t.tooltip || "")}</textarea>`) +
     `<div class="modal-del-row"><span></span><button type="button" id="m-delete" class="modal-del">Delete activity</button></div>`;
   let getDeps = () => (t.deps || []).slice();
@@ -3328,6 +3351,8 @@ function openTaskModal(wsIndex, taskIndex) {
     if (g("m-chips").value !== "") nt.chips = +g("m-chips").value;
     if (g("m-assigned").value.trim()) nt.assigned = g("m-assigned").value.trim();
     if (g("m-link").value.trim()) nt.link = g("m-link").value.trim();
+    const statusVal = modalEl.querySelector(".status-btn.active");
+    if (statusVal && statusVal.dataset.st) nt.status = statusVal.dataset.st;
     if (g("m-tip").value) nt.tooltip = g("m-tip").value;
     const deps = getDeps();
     if (deps.length) nt.deps = deps;
@@ -3366,6 +3391,7 @@ function openTaskModal(wsIndex, taskIndex) {
   wireAssigneeAutocomplete();
   wireTaskPreview();
   wireGhIssueCard();
+  wireStatusButtons();
   modalEl.querySelector("#m-delete").addEventListener("click", () => deleteTask(wsIndex, taskIndex));
 }
 
