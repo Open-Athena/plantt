@@ -130,7 +130,7 @@ body.compact-mode #chart-container { background: var(--surface); padding: 18px; 
   font-family: var(--font-serif); color: var(--fg);
 }
 .modal-title { font-size: 18px; margin-bottom: 12px; }
-.modal-body { display: flex; flex-direction: column; gap: 10px; }
+.modal-body { display: flex; flex-direction: column; gap: 10px; overflow: hidden; }
 .modal-field { display: flex; flex-direction: column; gap: 3px; font-size: 13px; color: var(--label); }
 .modal-field > span { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
 .modal-group { border: 1px solid var(--border); border-radius: 4px; padding: 6px 10px 8px; }
@@ -140,6 +140,7 @@ body.compact-mode #chart-container { background: var(--surface); padding: 18px; 
 #modal input[type="number"], #modal select, #modal textarea {
   font-family: var(--font-mono); font-size: 12px;
   border: 1px solid var(--border); border-radius: 3px; padding: 4px 6px; background: var(--bg); color: var(--fg);
+  box-sizing: border-box; max-width: 100%;
 }
 #modal textarea { resize: vertical; width: 100%; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
@@ -149,10 +150,10 @@ body.compact-mode #chart-container { background: var(--surface); padding: 18px; 
 }
 .modal-actions button[data-act="save"] { background: var(--dep-hl); color: var(--bg); border-color: var(--dep-hl); }
 .modal-actions button:hover { filter: brightness(0.97); }
-#modal.modal-wide { width: 740px; max-width: 96vw; }
-.modal-columns { display: flex; gap: 16px; min-height: 300px; }
-.modal-col-left { flex: 1; min-width: 0; overflow-y: auto; max-height: 60vh; }
-.modal-col-right { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+#modal.modal-wide { width: 740px; max-width: 96vw; overflow-x: hidden; }
+.modal-columns { display: flex; gap: 16px; }
+.modal-col-left { flex: 3; min-width: 0; overflow-y: auto; overflow-x: hidden; max-height: 70vh; padding-right: 2px; }
+.modal-col-right { flex: 2; min-width: 0; display: flex; flex-direction: column; max-height: 70vh; }
 .modal-preview-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 4px; }
 .modal-preview {
   flex: 1; overflow-y: auto; padding: 10px 12px; border: 1px solid var(--border); border-radius: 4px;
