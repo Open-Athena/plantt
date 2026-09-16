@@ -758,13 +758,18 @@ function renderSVG(data, layout) {
       const barY = t.y - barH / 2;
       const barW = Math.max(t.x2 - t.x1, 2);
 
+      const issueState = ghIssueState(t);
+      const taskG = el("g", issueState ? { opacity: "0.4" } : {});
+      svg.appendChild(taskG);
+      const appendTo = (child) => taskG.appendChild(child);
+
       // Lag lead-in: a 1px line tracing back to the predecessor's end, with a small
       // tick anchoring where the wait began. Drawn under the bar. (Hidden when the
       // dependency overlay is on — the arrow conveys the same link, uniformly.)
       if (depsMode !== "all" && t.lagX != null && t.lagX < t.x1 - 0.5) {
-        svg.appendChild(el("line", { x1: t.lagX, y1: t.y, x2: t.x1, y2: t.y,
+        appendTo(el("line", { x1: t.lagX, y1: t.y, x2: t.x1, y2: t.y,
           stroke: ws.color, "stroke-width": 1, opacity: 0.5 }));
-        svg.appendChild(el("line", { x1: t.lagX, y1: t.y - 2.5, x2: t.lagX, y2: t.y + 2.5,
+        appendTo(el("line", { x1: t.lagX, y1: t.y - 2.5, x2: t.lagX, y2: t.y + 2.5,
           stroke: ws.color, "stroke-width": 1, opacity: 0.5 }));
       }
 
@@ -775,16 +780,12 @@ function renderSVG(data, layout) {
         barAttrs.rx = "2";
         barAttrs.ry = "2";
       }
-      svg.appendChild(el("rect", barAttrs));
+      appendTo(el("rect", barAttrs));
 
-      // Drag highlight — outline the dragged item (and, in the same colour, the
-      // items moving with it). The moving dates are shown by the hover date chips
-      // for the PRIMARY item only (drawn live in renderHighlights), so the drag no
-      // longer paints a date readout on every moving bar.
       if (dragHighlight && dragHighlight.tasks && dragHighlight.tasks.has(t.name)) {
         const isPrimary = t.name === dragHighlight.primary;
         const pad = 2.5;
-        svg.appendChild(el("rect", {
+        appendTo(el("rect", {
           x: t.x1 - pad, y: barY - pad, width: barW + 2 * pad, height: barH + 2 * pad,
           fill: "none", stroke: DRAG_HL, "stroke-width": isPrimary ? 2 : 1.25,
           "stroke-dasharray": isPrimary ? "" : "3,2", rx: 3, ry: 3
@@ -827,8 +828,8 @@ function renderSVG(data, layout) {
           txt.appendChild(tspan);
           widest = Math.max(widest, measureText(lines[li], fontSize));
         }
-        svg.appendChild(txt);
-        if (hasAvatar) _renderAvatar(svg, t.assigned.slice(1), t.x2 + labelPad, t.y - avatarSize / 2, avatarSize);
+        appendTo(txt);
+        if (hasAvatar) _renderAvatar(taskG, t.assigned.slice(1), t.x2 + labelPad, t.y - avatarSize / 2, avatarSize);
         clusterX = anchorX + widest + 8; // push cluster annotation past the flipped label
       } else {
         const anchorX = t.x1 - labelPad - avatarSpace;
@@ -847,14 +848,12 @@ function renderSVG(data, layout) {
           tspan.textContent = lines[li];
           txt.appendChild(tspan);
         }
-        svg.appendChild(txt);
-        if (hasAvatar) _renderAvatar(svg, t.assigned.slice(1), t.x1 - labelPad - avatarSize, t.y - avatarSize / 2, avatarSize);
+        appendTo(txt);
+        if (hasAvatar) _renderAvatar(taskG, t.assigned.slice(1), t.x1 - labelPad - avatarSize, t.y - avatarSize / 2, avatarSize);
       }
 
-      // Cluster annotation — small muted label to the right of the bar end
-      // (or past the flipped label so the two don't overlap)
       if (t.cluster) {
-        svg.appendChild(el("text", {
+        appendTo(el("text", {
           x: clusterX, y: t.y + 3.5,
           "font-family": '"ET Book", Palatino, Georgia, serif',
           "font-size": "10", fill: FAINT, "font-style": "italic",
@@ -862,8 +861,13 @@ function renderSVG(data, layout) {
         }, t.cluster));
       }
 
-      // Interaction: drag (move/resize), double-click (edit), hover (tooltip),
-      // single-click (open link)
+      // Issue status decorations
+      if (issueState === "done") {
+        appendTo(el("text", { x: t.x2 + 4, y: t.y + 4, "font-size": "11", fill: "#3fb950" }, "✓"));
+      } else if (issueState === "cancelled") {
+        appendTo(el("line", { x1: t.x1, y1: t.y, x2: t.x2, y2: t.y, stroke: MUTED_TEXT, "stroke-width": 1.5 }));
+      }
+
       addTaskHandles(svg, t);
     }
 
@@ -2973,19 +2977,39 @@ function modalKeydown(e) {
     else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
   }
 }
-function openModalShell(title, bodyHtml, onSave) {
+function openModalShell(title, bodyHtml, onSave, opts) {
   closeModal();
+  opts = opts || {};
   modalEl = document.createElement("div");
   modalEl.id = "modal-overlay";
-  modalEl.innerHTML =
-    `<div id="modal" role="dialog" aria-modal="true" aria-label="${esc(title)}">
-       <div class="modal-title">${esc(title)}</div>
-       <div class="modal-body">${bodyHtml}</div>
-       <div class="modal-actions">
-         <button type="button" data-act="cancel">Cancel</button>
-         <button type="button" data-act="save">Save</button>
-       </div>
-     </div>`;
+  const wide = opts.wide;
+  if (wide) {
+    modalEl.innerHTML =
+      `<div id="modal" class="modal-wide" role="dialog" aria-modal="true" aria-label="${esc(title)}">
+         <div class="modal-title">${esc(title)}</div>
+         <div class="modal-columns">
+           <div class="modal-body modal-col-left">${bodyHtml}</div>
+           <div class="modal-col-right">
+             <div class="modal-preview-label">Preview</div>
+             <div id="modal-preview" class="modal-preview"></div>
+           </div>
+         </div>
+         <div class="modal-actions">
+           <button type="button" data-act="cancel">Cancel</button>
+           <button type="button" data-act="save">Save</button>
+         </div>
+       </div>`;
+  } else {
+    modalEl.innerHTML =
+      `<div id="modal" role="dialog" aria-modal="true" aria-label="${esc(title)}">
+         <div class="modal-title">${esc(title)}</div>
+         <div class="modal-body">${bodyHtml}</div>
+         <div class="modal-actions">
+           <button type="button" data-act="cancel">Cancel</button>
+           <button type="button" data-act="save">Save</button>
+         </div>
+       </div>`;
+  }
   document.body.appendChild(modalEl);
   modalEl._save = onSave;
   modalEl.querySelector('[data-act="cancel"]').addEventListener("click", closeModal);
@@ -3136,6 +3160,98 @@ function wireAssigneeAutocomplete() {
   };
 }
 
+// Live markdown preview in the right column of the wide task modal.
+function wireTaskPreview() {
+  const tip = modalEl.querySelector("#m-tip");
+  const preview = modalEl.querySelector("#modal-preview");
+  if (!tip || !preview) return;
+  const update = () => {
+    const md = tip.value;
+    const rendered = marked.parse(md || "");
+    const escaped = esc(md || "").replace(/\n/g, "<br>");
+    preview.innerHTML = `<div class="preview-rendered">${rendered}</div><div class="preview-source">${escaped}</div>`;
+  };
+  tip.addEventListener("input", update);
+  update();
+}
+
+// Parse a GitHub issue/PR URL → { owner, repo, number, isPR }
+function parseGhUrl(url) {
+  if (!url) return null;
+  const m = url.match(/github\.com\/([^/]+)\/([^/]+)\/(issues|pull)\/(\d+)/);
+  return m ? { owner: m[1], repo: m[2], number: +m[4], isPR: m[3] === "pull" } : null;
+}
+
+const _ghIssueCache = {};
+async function fetchGhIssue(owner, repo, number) {
+  const key = `${owner}/${repo}/${number}`;
+  if (_ghIssueCache[key]) return _ghIssueCache[key];
+  try {
+    const r = await fetch(`https://api.github.com/repos/${owner}/${repo}/issues/${number}`, { headers: { Accept: "application/vnd.github+json" } });
+    if (!r.ok) return null;
+    const j = await r.json();
+    _ghIssueCache[key] = j;
+    return j;
+  } catch (e) { return null; }
+}
+
+function wireGhIssueCard() {
+  const linkEl = modalEl.querySelector("#m-link");
+  const slot = modalEl.querySelector("#gh-issue-slot");
+  if (!linkEl || !slot) return;
+  let lastUrl = "";
+  const refresh = async () => {
+    const url = linkEl.value.trim();
+    if (url === lastUrl) return;
+    lastUrl = url;
+    const gh = parseGhUrl(url);
+    if (!gh) { slot.innerHTML = ""; return; }
+    slot.innerHTML = `<div class="gh-issue-card"><span style="color:var(--muted)">Loading…</span></div>`;
+    const issue = await fetchGhIssue(gh.owner, gh.repo, gh.number);
+    if (linkEl.value.trim() !== url) return;
+    if (!issue) { slot.innerHTML = ""; return; }
+    const isPR = !!issue.pull_request;
+    const merged = isPR && issue.pull_request.merged_at;
+    const stateLabel = merged ? "merged" : issue.state;
+    const stateClass = merged ? "gh-state-merged" : issue.state === "open" ? "gh-state-open" : "gh-state-closed";
+    const avatar = issue.user && issue.user.avatar_url ? `<img src="${esc(issue.user.avatar_url)}&s=24" style="width:18px;height:18px;border-radius:50%">` : "";
+    slot.innerHTML =
+      `<div class="gh-issue-card">
+         ${avatar}
+         <a href="${esc(url)}" target="_blank" rel="noopener">${esc(issue.title)}</a>
+         <span class="gh-state ${stateClass}">${stateLabel}</span>
+         <span style="color:var(--muted);margin-left:auto">#${gh.number}</span>
+       </div>`;
+  };
+  linkEl.addEventListener("input", refresh);
+  linkEl.addEventListener("change", refresh);
+  refresh();
+}
+
+// Check cached GH issue/PR state for chart decorations. Returns "done", "cancelled", or null.
+function ghIssueState(t) {
+  if (!t.link) return null;
+  const gh = parseGhUrl(t.link);
+  if (!gh) return null;
+  const key = `${gh.owner}/${gh.repo}/${gh.number}`;
+  const issue = _ghIssueCache[key];
+  if (!issue || issue.state === "open") return null;
+  if (issue.pull_request && issue.pull_request.merged_at) return "done";
+  if (issue.state_reason === "not_planned") return "cancelled";
+  return "done";
+}
+
+// Kick off background fetch for all tasks with GH links so the cache populates.
+function prefetchGhIssues() {
+  const promises = [];
+  for (const ws of (lastValidData || model).workstreams)
+    for (const t of ws.tasks) {
+      const gh = parseGhUrl(t.link);
+      if (gh) promises.push(fetchGhIssue(gh.owner, gh.repo, gh.number));
+    }
+  if (promises.length) Promise.all(promises).then(() => { if (lastValidData) render(lastValidData); });
+}
+
 // Free chips on this task's cluster at its start (capacity minus what other
 // activities are using then) — the default allocation in the modal
 function remainingChips(wsIndex, taskIndex) {
@@ -3193,8 +3309,9 @@ function openTaskModal(wsIndex, taskIndex) {
     field("Chips", `<input id="m-chips" type="number" min="1" ${maxChips ? `max="${maxChips}"` : ""} value="${esc(chipsVal)}"> <span style="font-size:11px;color:#888">max ${maxChips || "?"}${remChips != null ? ` · ${remChips} free at start` : ""}</span>`) +
     depsField() +
     field("Assigned to", `<input id="m-assigned" type="text" placeholder="name or @github" value="${esc(t.assigned || "")}">`) +
-    field("Link", `<input id="m-link" type="url" value="${esc(t.link || "")}">`) +
-    field("Tooltip (markdown)", `<textarea id="m-tip" rows="8">${esc(t.tooltip || "")}</textarea>`) +
+    field("Link", `<input id="m-link" type="url" placeholder="https://github.com/…" value="${esc(t.link || "")}">`) +
+    `<div id="gh-issue-slot"></div>` +
+    field("Tooltip (markdown)", `<textarea id="m-tip" rows="6">${esc(t.tooltip || "")}</textarea>`) +
     `<div class="modal-del-row"><span></span><button type="button" id="m-delete" class="modal-del">Delete activity</button></div>`;
   let getDeps = () => (t.deps || []).slice();
   openModalShell("Edit activity", body, () => {
@@ -3244,9 +3361,11 @@ function openTaskModal(wsIndex, taskIndex) {
         details: { fields: changedFields(oldTask, nt, TASK_FIELDS) } };
     recordChange(desc);
     commitModel(); closeModal();
-  });
+  }, { wide: true });
   getDeps = wireDepsPicker(oldName, t.deps);
   wireAssigneeAutocomplete();
+  wireTaskPreview();
+  wireGhIssueCard();
   modalEl.querySelector("#m-delete").addEventListener("click", () => deleteTask(wsIndex, taskIndex));
 }
 
@@ -4056,6 +4175,8 @@ if (!lastValidData) {
   setTimeout(function () { cm.refresh(); }, 260);
   adjustChartPadding();
 }
+
+prefetchGhIssues();
 
 // Expose the (serializable) history tree for inspection / future visualization.
 window.__history = exportHistory;
