@@ -299,6 +299,7 @@ function computeLayout(data, containerWidth) {
         cluster: t.cluster || null,
         link: t.link || null,
         assigned: t.assigned || null,
+        status: t.status || null,
         barH: barH,
         x1: timeToX(t._start),
         x2: timeToX(t._end),
@@ -759,7 +760,7 @@ function renderSVG(data, layout) {
       const barW = Math.max(t.x2 - t.x1, 2);
 
       const issueState = ghIssueState(t);
-      const taskG = el("g", issueState ? { opacity: "0.4" } : {});
+      const taskG = el("g", issueState ? { opacity: "0.5" } : {});
       svg.appendChild(taskG);
       const appendTo = (child) => taskG.appendChild(child);
 
@@ -816,11 +817,13 @@ function renderSVG(data, layout) {
         const lines = (textW > spaceRight - avatarSpace) ? wrapText(t.name, fontSize, Math.max(spaceRight - avatarSpace, 40)) : [t.name];
         const totalH = lines.length * lineHeight;
         const startY = t.y + 3.5 - (totalH - lineHeight) / 2;
-        const txt = el("text", {
+        const txtAttrs = {
           x: anchorX, y: startY,
           "font-family": '"ET Book", Palatino, Georgia, serif',
           "font-size": fontSize, fill: LABEL, "text-anchor": "start"
-        });
+        };
+        if (issueState) txtAttrs["text-decoration"] = "line-through";
+        const txt = el("text", txtAttrs);
         let widest = 0;
         for (let li = 0; li < lines.length; li++) {
           const tspan = el("tspan", { x: anchorX, dy: li === 0 ? "0" : lineHeight });
@@ -833,16 +836,17 @@ function renderSVG(data, layout) {
         clusterX = anchorX + widest + 8; // push cluster annotation past the flipped label
       } else {
         const anchorX = t.x1 - labelPad - avatarSpace;
-        // Wrap to available space; allow overlapping the bar a bit (+20px grace)
         const maxW = spaceLeft - avatarSpace + 20;
         const lines = textW > (spaceLeft - avatarSpace) ? wrapText(t.name, fontSize, maxW) : [t.name];
         const totalH = lines.length * lineHeight;
-        const startY = t.y + 3.5 - (totalH - lineHeight) / 2; // vertically center block on bar
-        const txt = el("text", {
+        const startY = t.y + 3.5 - (totalH - lineHeight) / 2;
+        const txtAttrs = {
           x: anchorX, y: startY,
           "font-family": '"ET Book", Palatino, Georgia, serif',
           "font-size": fontSize, fill: LABEL, "text-anchor": "end"
-        });
+        };
+        if (issueState) txtAttrs["text-decoration"] = "line-through";
+        const txt = el("text", txtAttrs);
         for (let li = 0; li < lines.length; li++) {
           const tspan = el("tspan", { x: anchorX, dy: li === 0 ? "0" : lineHeight });
           tspan.textContent = lines[li];
@@ -861,14 +865,15 @@ function renderSVG(data, layout) {
         }, t.cluster));
       }
 
-      // Issue status decorations
-      if (issueState === "done") {
-        appendTo(el("text", { x: t.x2 + 4, y: t.y + 4, "font-size": "11", fill: "#3fb950" }, "✓"));
-      } else if (issueState === "cancelled") {
-        appendTo(el("line", { x1: t.x1, y1: t.y, x2: t.x2, y2: t.y, stroke: MUTED_TEXT, "stroke-width": 1.5 }));
-      }
-
       addTaskHandles(svg, t);
+
+      // Status decorations — opposite end of the bar from the label
+      if (issueState === "done") {
+        const cx = flipRight ? t.x1 - 14 : t.x2 + 4;
+        svg.appendChild(el("text", { x: cx, y: t.y + 4, "font-size": "11", fill: "#3fb950", "pointer-events": "none" }, "✓"));
+      } else if (issueState === "cancelled") {
+        svg.appendChild(el("line", { x1: t.x1, y1: t.y, x2: t.x2, y2: t.y, stroke: MUTED_TEXT, "stroke-width": 1.5, "pointer-events": "none" }));
+      }
     }
 
     // Milestones
@@ -1817,7 +1822,7 @@ function jumpTo(id, label) {
   schedulePersist();
   updateUrl(); // keep the shareable #slug in sync with the scrubbed state (as commitModel does)
   updateHistoryButtons();
-  if (label) setStatus(`${label}: ${node.summary}`, false);
+  if (label) { setStatus(`${label}: ${node.summary}`, false); showToast(`${label}: ${node.summary}`); }
   if (vizOpen) renderViz();
   syncHead(node); // undo/redo/jump moves the shared head too (guarded while applying remote moves)
 }
@@ -2949,6 +2954,7 @@ function esc(s) { return String(s == null ? "" : s).replace(/&/g, "&amp;").repla
 let modalEl = null;
 function closeModal() {
   if (!modalEl) return;
+  if (modalEl._autoSave && modalEl._save) modalEl._save();
   modalEl.remove(); modalEl = null;
   document.removeEventListener("keydown", modalKeydown, true);
 }
@@ -2971,7 +2977,7 @@ function modalKeydown(e) {
     if (e.target.id === "m-assigned" && modalEl._assigneeCloseMenu && modalEl._assigneeCloseMenu()) { e.preventDefault(); return; }
     e.preventDefault(); closeModal();
   }
-  else if (e.key === "Enter" && e.target.tagName !== "TEXTAREA") { e.preventDefault(); modalEl._save(); }
+  else if (e.key === "Enter" && e.target.tagName !== "TEXTAREA") { e.preventDefault(); if (modalEl._save) modalEl._save(); if (!modalEl._autoSave) closeModal(); }
   else if (e.key === "Tab") {
     const f = modalEl.querySelectorAll("input,select,textarea,button");
     if (!f.length) return;
@@ -2985,38 +2991,36 @@ function openModalShell(title, bodyHtml, onSave, opts) {
   opts = opts || {};
   modalEl = document.createElement("div");
   modalEl.id = "modal-overlay";
-  const wide = opts.wide;
-  if (wide) {
+  const headerHtml = opts.headerHtml || `<div class="modal-title">${esc(title)}</div>`;
+  const actionsHtml = opts.autoSave ? "" :
+    `<div class="modal-actions">${opts.leftAction || ""}<div class="modal-actions-right">` +
+    `<button type="button" data-act="cancel">Cancel</button>` +
+    `<button type="button" data-act="save">Save</button></div></div>`;
+  if (opts.bodyRight) {
     modalEl.innerHTML =
-      `<div id="modal" class="modal-wide" role="dialog" aria-modal="true" aria-label="${esc(title)}">
-         <div class="modal-title">${esc(title)}</div>
+      `<div id="modal" class="modal-wide" role="dialog" aria-modal="true" aria-label="${esc(title || "")}">
+         ${headerHtml}
          <div class="modal-columns">
            <div class="modal-body modal-col-left">${bodyHtml}</div>
-           <div class="modal-col-right">
-             <div class="modal-preview-label">Preview</div>
-             <div id="modal-preview" class="modal-preview"></div>
-           </div>
+           <div class="modal-body modal-col-right">${opts.bodyRight}</div>
          </div>
-         <div class="modal-actions">
-           <button type="button" data-act="cancel">Cancel</button>
-           <button type="button" data-act="save">Save</button>
-         </div>
+         ${actionsHtml}
        </div>`;
   } else {
     modalEl.innerHTML =
-      `<div id="modal" role="dialog" aria-modal="true" aria-label="${esc(title)}">
-         <div class="modal-title">${esc(title)}</div>
+      `<div id="modal" role="dialog" aria-modal="true" aria-label="${esc(title || "")}">
+         ${headerHtml}
          <div class="modal-body">${bodyHtml}</div>
-         <div class="modal-actions">
-           <button type="button" data-act="cancel">Cancel</button>
-           <button type="button" data-act="save">Save</button>
-         </div>
+         ${actionsHtml}
        </div>`;
   }
   document.body.appendChild(modalEl);
   modalEl._save = onSave;
-  modalEl.querySelector('[data-act="cancel"]').addEventListener("click", closeModal);
-  modalEl.querySelector('[data-act="save"]').addEventListener("click", onSave);
+  if (opts.autoSave) modalEl._autoSave = true;
+  if (!opts.autoSave) {
+    modalEl.querySelector('[data-act="cancel"]').addEventListener("click", closeModal);
+    modalEl.querySelector('[data-act="save"]').addEventListener("click", onSave);
+  }
   modalEl.addEventListener("pointerdown", e => { if (e.target === modalEl) closeModal(); });
   document.addEventListener("keydown", modalKeydown, true);
   const first = modalEl.querySelector("input,select,textarea");
@@ -3027,12 +3031,22 @@ function field(label, inner) { return `<label class="modal-field"><span>${esc(la
 // Dependency multi-select: chips for chosen items + a fuzzy-search box. Markup only;
 // behaviour is wired by wireDepsPicker() once the modal DOM exists.
 function depsField() {
-  return `<div class="modal-field deps-field"><span>Dependencies</span>
+  return `<div class="modal-field deps-field"><span>Depends on</span>
     <div class="deps-picker">
       <div class="deps-chips" id="m-deps-chips"></div>
       <div class="deps-input-wrap">
         <input id="m-deps-input" class="deps-input" type="text" autocomplete="off" placeholder="Search activities & milestones…">
         <div class="deps-menu" id="m-deps-menu"></div>
+      </div>
+    </div></div>`;
+}
+function dependentsField() {
+  return `<div class="modal-field deps-field"><span>Dependents</span>
+    <div class="deps-picker">
+      <div class="deps-chips" id="m-dependents-chips"></div>
+      <div class="deps-input-wrap">
+        <input id="m-dependents-input" class="deps-input" type="text" autocomplete="off" placeholder="Search activities & milestones…">
+        <div class="deps-menu" id="m-dependents-menu"></div>
       </div>
     </div></div>`;
 }
@@ -3105,6 +3119,68 @@ function wireDepsPicker(selfName, initialDeps) {
   return () => selected.slice();
 }
 
+function wireDependentsPicker(selfName, onChangeCallback) {
+  const chipsEl = modalEl.querySelector("#m-dependents-chips");
+  const inputEl = modalEl.querySelector("#m-dependents-input");
+  const menuEl = modalEl.querySelector("#m-dependents-menu");
+  if (!chipsEl || !inputEl || !menuEl) return () => [];
+  const names = _allItems(model).map((it) => it.name).filter((n) => n !== selfName);
+  const selected = [];
+  for (const it of _allItems(model))
+    if (Array.isArray(it.deps) && it.deps.includes(selfName)) selected.push(it.name);
+  let matches = [], active = -1;
+
+  function renderChips() {
+    chipsEl.innerHTML = selected
+      .map((n) => `<span class="deps-chip">${esc(n)}<button type="button" class="deps-chip-x" data-n="${esc(n)}" aria-label="Remove ${esc(n)}">×</button></span>`)
+      .join("");
+    chipsEl.querySelectorAll(".deps-chip-x").forEach((b) =>
+      b.addEventListener("click", () => { remove(b.getAttribute("data-n")); inputEl.focus(); }));
+  }
+  function remove(n) {
+    const i = selected.indexOf(n); if (i >= 0) selected.splice(i, 1);
+    renderChips(); renderMenu();
+    if (onChangeCallback) onChangeCallback();
+  }
+  function add(n) {
+    if (n && !selected.includes(n)) selected.push(n);
+    inputEl.value = ""; active = -1; renderChips(); renderMenu();
+    if (onChangeCallback) onChangeCallback();
+  }
+
+  function renderMenu() {
+    const q = inputEl.value.trim().toLowerCase();
+    const pool = names.filter((n) => !selected.includes(n));
+    matches = q
+      ? pool.map((n) => [n, fuzzyScore(n, q)]).filter((x) => x[1] >= 0).sort((a, b) => b[1] - a[1]).map((x) => x[0]).slice(0, 8)
+      : pool.slice(0, 8);
+    if (active >= matches.length) active = matches.length - 1;
+    if (!matches.length) {
+      menuEl.innerHTML = q ? `<div class="deps-opt deps-empty">No matches</div>` : "";
+      menuEl.classList.toggle("open", !!q);
+      return;
+    }
+    menuEl.innerHTML = matches.map((n, i) => `<div class="deps-opt${i === active ? " active" : ""}" data-i="${i}">${esc(n)}</div>`).join("");
+    menuEl.classList.add("open");
+    menuEl.querySelectorAll(".deps-opt").forEach((o) =>
+      o.addEventListener("mousedown", (e) => { e.preventDefault(); add(matches[+o.getAttribute("data-i")]); }));
+  }
+
+  inputEl.addEventListener("input", () => { active = 0; renderMenu(); });
+  inputEl.addEventListener("focus", renderMenu);
+  inputEl.addEventListener("blur", () => setTimeout(() => menuEl.classList.remove("open"), 120));
+  inputEl.addEventListener("keydown", (e) => {
+    if (e.key === "Backspace" && inputEl.value === "" && selected.length) { e.preventDefault(); remove(selected[selected.length - 1]); }
+    if (e.key === "ArrowDown") { e.preventDefault(); if (matches.length) { active = (active + 1) % matches.length; renderMenu(); } }
+    if (e.key === "ArrowUp") { e.preventDefault(); if (matches.length) { active = (active - 1 + matches.length) % matches.length; renderMenu(); } }
+    if (e.key === "Enter") { e.preventDefault(); if (active >= 0 && matches[active]) add(matches[active]); }
+    if (e.key === "Escape" && menuEl.classList.contains("open")) { e.preventDefault(); menuEl.classList.remove("open"); }
+  });
+
+  renderChips();
+  return () => selected.slice();
+}
+
 // Wire assignee autocomplete on #m-assigned. Suggests existing assignees from the plan.
 function wireAssigneeAutocomplete() {
   const inputEl = modalEl.querySelector("#m-assigned");
@@ -3163,18 +3239,28 @@ function wireAssigneeAutocomplete() {
   };
 }
 
-// Live markdown preview in the right column of the wide task modal.
+// WYSIWYM: transparent textarea over a syntax-highlighted pre element.
+function _highlightMd(raw) {
+  if (!raw) return "";
+  let h = esc(raw);
+  h = h.replace(/`([^`\n]+)`/g, '<span class="md-dim">`</span><span class="md-code">$1</span><span class="md-dim">`</span>');
+  h = h.replace(/\*\*(.+?)\*\*/g, '<span class="md-dim">**</span><strong>$1</strong><span class="md-dim">**</span>');
+  h = h.replace(/(?<!\*)\*([^*\n]+)\*(?!\*)/g, '<span class="md-dim">*</span><em>$1</em><span class="md-dim">*</span>');
+  h = h.replace(/^(#{1,3}) (.+)$/gm, '<span class="md-dim">$1</span> <span class="md-heading">$2</span>');
+  h = h.replace(/^([-*]) /gm, '<span class="md-dim">$1</span> ');
+  h = h.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<span class="md-dim">[</span><span class="md-link">$1</span><span class="md-dim">](</span><span class="md-dim md-url">$2</span><span class="md-dim">)</span>');
+  return h;
+}
 function wireTaskPreview() {
   const tip = modalEl.querySelector("#m-tip");
-  const preview = modalEl.querySelector("#modal-preview");
-  if (!tip || !preview) return;
+  const hl = modalEl.querySelector("#modal-preview");
+  if (!tip || !hl) return;
   const update = () => {
     const md = tip.value;
-    const rendered = marked.parse(md || "");
-    const escaped = esc(md || "").replace(/\n/g, "<br>");
-    preview.innerHTML = `<div class="preview-rendered">${rendered}</div><div class="preview-source">${escaped}</div>`;
+    hl.innerHTML = md ? _highlightMd(md) + "\n" : '<span class="md-placeholder">Markdown tooltip…</span>';
   };
   tip.addEventListener("input", update);
+  tip.addEventListener("scroll", () => { hl.scrollTop = tip.scrollTop; });
   update();
 }
 
@@ -3254,10 +3340,12 @@ function ghIssueState(t) {
   if (gh) {
     const key = `${gh.owner}/${gh.repo}/${gh.number}`;
     const issue = _ghIssueCache[key];
-    if (!issue || issue.state === "open") return null;
-    if (issue.pull_request && issue.pull_request.merged_at) return "done";
-    if (issue.state_reason === "not_planned") return "cancelled";
-    return "done";
+    if (issue) {
+      if (issue.state === "open") return null;
+      if (issue.pull_request && issue.pull_request.merged_at) return "done";
+      if (issue.state_reason === "not_planned") return "cancelled";
+      return "done";
+    }
   }
   return t.status || null;
 }
@@ -3294,9 +3382,8 @@ function remainingChips(wsIndex, taskIndex) {
 
 function openTaskModal(wsIndex, taskIndex) {
   const t = model.workstreams[wsIndex].tasks[taskIndex];
-  const oldName = t.name;
-  const oldTask = clone(t);
-  const oldWsName = model.workstreams[wsIndex].name;
+  let curWs = wsIndex, curIdx = taskIndex, curName = t.name;
+  let lastTask = clone(t);
   const cl = capCluster(model, t.cluster);
   const maxChips = cl ? capMaxChips(cl) : "";
   const remChips = remainingChips(wsIndex, taskIndex);
@@ -3305,18 +3392,24 @@ function openTaskModal(wsIndex, taskIndex) {
   const isAfter = typeof t.start === "string" || (Array.isArray(t.start) && t.start[0] === "after");
   const startDateVal = (Array.isArray(t.start) && t.start[0] === "date") ? t.start[1] : "";
   const afterName = startParent(t) || "";
-  const taskOpts = modelTasks().filter(x => x.name !== oldName).map(x => `<option ${x.name === afterName ? "selected" : ""}>${esc(x.name)}</option>`).join("");
+  const taskOpts = modelTasks().filter(x => x.name !== curName).map(x => `<option ${x.name === afterName ? "selected" : ""}>${esc(x.name)}</option>`).join("");
   const isEndDate = Array.isArray(t.end) && t.end[0] === "date";
   const clusterOpts = ["", ...(model.capacity || []).map(c => c.name)]
     .map(c => `<option ${c === (t.cluster || "") ? "selected" : ""}>${esc(c)}</option>`).join("");
-  const body =
-    field("Name", `<input id="m-name" type="text" value="${esc(t.name)}">`) +
+  const headerHtml =
+    `<div class="modal-header-row">` +
+      `<button type="button" class="modal-trash" id="m-delete" title="Delete activity">&#x1F5D1;</button>` +
+      `<input id="m-name" class="modal-title-input" type="text" value="${esc(t.name)}">` +
+    `</div>`;
+  const bodyLeft =
     field("Workstream", `<select id="m-ws">${wsOpts}</select>`) +
     `<fieldset class="modal-group"><legend>Start</legend>
        <label class="modal-radio"><input type="radio" name="m-startkind" id="m-sk-date" ${isAfter ? "" : "checked"}> On date
          <input id="m-startdate" type="date" value="${esc(startDateVal)}"></label>
-       <label class="modal-radio"><input type="radio" name="m-startkind" id="m-sk-after" ${isAfter ? "checked" : ""}> After
-         <select id="m-after">${taskOpts}</select> + <input id="m-lag" type="number" value="${startLag(t)}" style="width:4em"> days lag</label>
+       <label class="modal-radio"><input type="radio" name="m-startkind" id="m-sk-after" ${isAfter ? "checked" : ""}> After</label>
+       <div id="m-after-fields" class="modal-after-fields${isAfter ? "" : " hidden"}">
+         <select id="m-after">${taskOpts}</select> + <input id="m-lag" type="number" value="${startLag(t)}" style="width:4em"> days lag
+       </div>
      </fieldset>` +
     `<fieldset class="modal-group"><legend>End</legend>
        <label class="modal-radio"><input type="radio" name="m-endkind" id="m-ek-dur" ${isEndDate ? "" : "checked"}>
@@ -3325,24 +3418,39 @@ function openTaskModal(wsIndex, taskIndex) {
        <label class="modal-radio"><input type="radio" name="m-endkind" id="m-ek-date" ${isEndDate ? "checked" : ""}> On date
          <input id="m-enddate" type="date" value="${esc(isEndDate ? t.end[1] : "")}"></label>
      </fieldset>` +
-    field("Significance", `<input id="m-sig" type="number" min="0" value="${esc(t.significance != null ? t.significance : "")}">`) +
-    field("Cluster", `<select id="m-cluster">${clusterOpts}</select>`) +
-    field("Chips", `<input id="m-chips" type="number" min="1" ${maxChips ? `max="${maxChips}"` : ""} value="${esc(chipsVal)}"> <span style="font-size:11px;color:#888">max ${maxChips || "?"}${remChips != null ? ` · ${remChips} free at start` : ""}</span>`) +
     depsField() +
-    field("Assigned to", `<input id="m-assigned" type="text" placeholder="name or @github" value="${esc(t.assigned || "")}">`) +
-    field("Link", `<input id="m-link" type="url" placeholder="https://github.com/…" value="${esc(t.link || "")}">`) +
+    dependentsField() +
+    `<div class="modal-row-compact">` +
+      `<label class="modal-field modal-field-sig"><span>Sig <span class="info-i" title="Bar thickness = significance × 3px">ⓘ</span></span><input id="m-sig" type="number" min="0" value="${esc(t.significance != null ? t.significance : "")}"></label>` +
+      `<label class="modal-field modal-field-flex"><span>Cluster</span><select id="m-cluster">${clusterOpts}</select></label>` +
+      `<label class="modal-field modal-field-flex"><span>Chips</span><input id="m-chips" type="number" min="1" ${maxChips ? `max="${maxChips}"` : ""} value="${esc(chipsVal)}"></label>` +
+    `</div>`;
+  const bodyRight =
+    `<label class="modal-field"><span>Assigned to <span class="info-i" title="Prefix with @ to load a GitHub avatar on the chart">ⓘ</span></span>` +
+      `<input id="m-assigned" type="text" placeholder="name or @github" value="${esc(t.assigned || "")}"></label>` +
+    `<div class="modal-row-link-status">` +
+      `<label class="modal-field modal-field-flex"><span>Link <span class="info-i" title="GitHub issue/PR links show live status and override manual status">ⓘ</span></span><input id="m-link" type="url" placeholder="https://github.com/…" value="${esc(t.link || "")}"></label>` +
+      `<div id="m-status-row" class="modal-field modal-field-status"><span>Status</span><div class="status-btns">` +
+        `<button type="button" class="status-btn${!t.status ? " active" : ""}" data-st="">Open</button>` +
+        `<button type="button" class="status-btn${t.status === "done" ? " active" : ""}" data-st="done">Done ✓</button>` +
+        `<button type="button" class="status-btn${t.status === "cancelled" ? " active" : ""}" data-st="cancelled">Cancelled</button>` +
+      `</div></div>` +
+    `</div>` +
     `<div id="gh-issue-slot"></div>` +
-    `<div id="m-status-row" class="modal-field"><span>Status</span><div class="status-btns">` +
-      `<button type="button" class="status-btn${!t.status ? " active" : ""}" data-st="">Open</button>` +
-      `<button type="button" class="status-btn${t.status === "done" ? " active" : ""}" data-st="done">Done ✓</button>` +
-      `<button type="button" class="status-btn${t.status === "cancelled" ? " active" : ""}" data-st="cancelled">Cancelled</button>` +
-    `</div></div>` +
-    field("Tooltip (markdown)", `<textarea id="m-tip" rows="6">${esc(t.tooltip || "")}</textarea>`) +
-    `<div class="modal-del-row"><span></span><button type="button" id="m-delete" class="modal-del">Delete activity</button></div>`;
+    `<div class="wysiwym-area">` +
+      `<label class="modal-field wysiwym-label"><span>Tooltip (markdown)</span></label>` +
+      `<div class="wysiwym-container">` +
+        `<pre id="modal-preview" class="wysiwym-highlight"></pre>` +
+        `<textarea id="m-tip" class="wysiwym-input">${esc(t.tooltip || "")}</textarea>` +
+      `</div>` +
+    `</div>`;
   let getDeps = () => (t.deps || []).slice();
-  openModalShell("Edit activity", body, () => {
+
+  function doSave() {
+    if (!modalEl) return;
     const g = id => modalEl.querySelector("#" + id);
-    const nt = { name: g("m-name").value.trim() || oldName };
+    if (!g("m-name")) return;
+    const nt = { name: g("m-name").value.trim() || curName };
     if (g("m-sk-after").checked) {
       const after = g("m-after").value, lag = +g("m-lag").value || 0;
       nt.start = lag === 0 ? after : ["after", after, ["days", lag]];
@@ -3359,43 +3467,107 @@ function openTaskModal(wsIndex, taskIndex) {
     if (g("m-tip").value) nt.tooltip = g("m-tip").value;
     const deps = getDeps();
     if (deps.length) nt.deps = deps;
-    // rename \u2192 repoint any dependents (count them for the history summary)
+    // Sync dependents: update other tasks' deps to match the picker
+    const wantedDependents = getDependents();
+    let dependentsChanged = false;
+    for (const it of _allItems(model)) {
+      if (it.name === curName) continue;
+      const hasDep = Array.isArray(it.deps) && it.deps.includes(curName);
+      const wanted = wantedDependents.includes(it.name);
+      if (wanted && !hasDep) {
+        if (!it.deps) it.deps = [];
+        it.deps.push(curName);
+        dependentsChanged = true;
+      } else if (!wanted && hasDep) {
+        it.deps = it.deps.filter(d => d !== curName);
+        if (!it.deps.length) delete it.deps;
+        dependentsChanged = true;
+      }
+    }
+    const changed = changedFields(lastTask, nt, TASK_FIELDS.concat("name"));
+    if (!changed.length && !dependentsChanged) return;
     let repointed = 0;
-    if (nt.name !== oldName) {
+    if (nt.name !== curName) {
       for (const x of modelTasks()) {
-        if (x.start === oldName) { x.start = nt.name; repointed++; }
-        else if (Array.isArray(x.start) && x.start[0] === "after" && x.start[1] === oldName) { x.start[1] = nt.name; repointed++; }
+        if (x.start === curName) { x.start = nt.name; repointed++; }
+        else if (Array.isArray(x.start) && x.start[0] === "after" && x.start[1] === curName) { x.start[1] = nt.name; repointed++; }
       }
       for (const it of _allItems(model))
-        if (Array.isArray(it.deps) && it.deps.includes(oldName)) { it.deps = it.deps.map((d) => (d === oldName ? nt.name : d)); repointed++; }
+        if (Array.isArray(it.deps) && it.deps.includes(curName)) { it.deps = it.deps.map((d) => (d === curName ? nt.name : d)); repointed++; }
     }
     const newWs = +g("m-ws").value;
-    if (newWs === wsIndex) {
-      model.workstreams[wsIndex].tasks[taskIndex] = nt; // replace in place (keep order)
+    const movedWs = newWs !== curWs;
+    const prevWsName = model.workstreams[curWs] ? model.workstreams[curWs].name : "";
+    if (!movedWs) {
+      model.workstreams[curWs].tasks[curIdx] = nt;
     } else {
-      model.workstreams[wsIndex].tasks.splice(taskIndex, 1);
+      model.workstreams[curWs].tasks.splice(curIdx, 1);
       model.workstreams[newWs].tasks.push(nt);
+      curWs = newWs;
+      curIdx = model.workstreams[newWs].tasks.length - 1;
     }
-    // One node per save; pick the most salient verb (rename > reassign > field edit).
     let desc;
-    if (nt.name !== oldName)
+    if (nt.name !== curName)
       desc = { source: "modal-task", verb: "rename", targetType: "task", targetName: nt.name,
-        details: { oldName, newName: nt.name, affectedCount: repointed } };
-    else if (newWs !== wsIndex)
+        details: { oldName: curName, newName: nt.name, affectedCount: repointed } };
+    else if (movedWs)
       desc = { source: "modal-task", verb: "reassign", targetType: "task", targetName: nt.name,
-        details: { fromWs: oldWsName, toWs: model.workstreams[newWs].name } };
+        details: { fromWs: prevWsName, toWs: model.workstreams[newWs].name } };
     else
       desc = { source: "modal-task", verb: "edit", targetType: "task", targetName: nt.name,
-        details: { fields: changedFields(oldTask, nt, TASK_FIELDS) } };
+        details: { fields: dependentsChanged ? changed.concat("dependents") : changed } };
     recordChange(desc);
-    commitModel(); closeModal();
-  }, { wide: true });
-  getDeps = wireDepsPicker(oldName, t.deps);
+    commitModel();
+    curName = nt.name;
+    lastTask = clone(nt);
+  }
+
+  openModalShell(t.name, bodyLeft, doSave, { bodyRight, headerHtml, autoSave: true });
+  getDeps = wireDepsPicker(curName, t.deps);
+  let getDependents = wireDependentsPicker(curName, () => doSave());
   wireAssigneeAutocomplete();
   wireTaskPreview();
   wireGhIssueCard();
   wireStatusButtons();
-  modalEl.querySelector("#m-delete").addEventListener("click", () => deleteTask(wsIndex, taskIndex));
+  // Toggle "after" fields visibility when start radio changes
+  const afterFields = modalEl.querySelector("#m-after-fields");
+  const skDate = modalEl.querySelector("#m-sk-date");
+  const skAfter = modalEl.querySelector("#m-sk-after");
+  if (afterFields && skDate && skAfter) {
+    const sync = () => { afterFields.classList.toggle("hidden", !skAfter.checked); };
+    skDate.addEventListener("change", () => {
+      sync();
+      // Pre-fill date from the resolved "after" start so switching modes preserves the date
+      if (lastValidData) {
+        const sd = modalEl.querySelector("#m-startdate");
+        for (const ws of lastValidData.workstreams)
+          for (const rt of ws.tasks)
+            if (rt.name === curName && rt._start) { sd.value = isoLocal(rt._start); return; }
+      }
+    });
+    skAfter.addEventListener("change", sync);
+  }
+  modalEl.querySelector("#m-delete").addEventListener("click", () => deleteTask(curWs, curIdx));
+
+  // Auto-save: debounced for text, immediate for discrete controls
+  let _saveTimer = null;
+  const debouncedSave = () => { clearTimeout(_saveTimer); _saveTimer = setTimeout(doSave, 400); };
+  const immediateSave = () => { clearTimeout(_saveTimer); doSave(); };
+  for (const id of ["m-name", "m-assigned", "m-link", "m-startdate", "m-enddate", "m-lag", "m-durn", "m-sig", "m-chips"]) {
+    const el = modalEl.querySelector("#" + id);
+    if (el) el.addEventListener("input", debouncedSave);
+  }
+  const tip = modalEl.querySelector("#m-tip");
+  if (tip) tip.addEventListener("input", debouncedSave);
+  for (const id of ["m-ws", "m-after", "m-durunit", "m-cluster"]) {
+    const el = modalEl.querySelector("#" + id);
+    if (el) el.addEventListener("change", immediateSave);
+  }
+  for (const id of ["m-sk-date", "m-sk-after", "m-ek-dur", "m-ek-date"]) {
+    const el = modalEl.querySelector("#" + id);
+    if (el) el.addEventListener("change", immediateSave);
+  }
+  modalEl.querySelectorAll(".status-btn").forEach(btn => btn.addEventListener("click", () => setTimeout(immediateSave, 0)));
 }
 
 // Remove a task, pinning anything that started "after" it to a fixed date so no
@@ -3418,6 +3590,7 @@ function deleteTask(wsIndex, taskIndex) {
     if (Array.isArray(it.deps) && it.deps.includes(gone)) it.deps = it.deps.filter((d) => d !== gone);
   recordChange({ source: "modal-task", verb: "delete", targetType: "task", targetName: gone, details: {} });
   commitModel(); closeModal();
+  showToast(`Deleted "${gone}" — Cmd+Z to undo`);
 }
 
 function openMilestoneModal(wsIndex, msIndex) {
@@ -3483,6 +3656,7 @@ function openMilestoneModal(wsIndex, msIndex) {
       if (Array.isArray(it.deps) && it.deps.includes(gone)) it.deps = it.deps.filter((d) => d !== gone);
     recordChange({ source: "modal-milestone", verb: "delete", targetType: "milestone", targetName: gone, details: {} });
     commitModel(); closeModal();
+    showToast(`Deleted "${gone}" — Cmd+Z to undo`);
   });
 }
 
@@ -3546,6 +3720,7 @@ function deleteWorkstream(wsIndex) {
   hiddenWs.delete(goneName);
   recordChange({ source: "modal-ws", verb: "delete", targetType: "workstream", targetName: goneName, details: {} });
   commitModel(); closeModal();
+  showToast(`Deleted "${goneName}" — Cmd+Z to undo`);
 }
 
 // ─── Remote control popup ─────────────────────────────────────────
@@ -3613,18 +3788,32 @@ function beginCapDrag(kind, capIndex, growIndex, e) {
 function beginAnnDrag(annIndex, e) {
   if (e.button !== 0 || dragState || capDrag) return;
   e.stopPropagation();
-  capDrag = { kind: "annotation", annIndex, origDate: parseDate(model.annotations[annIndex].date), grabClientX: e.clientX, pxPerDay: screenPxPerDay(), snapshot: clone(model), active: false };
+  capDrag = { kind: "annotation", annIndex, origDate: parseDate(model.annotations[annIndex].date), grabClientX: e.clientX, grabClientY: e.clientY, pxPerDay: screenPxPerDay(), snapshot: clone(model), active: false };
   window.addEventListener("pointermove", onCapDragMove);
   window.addEventListener("pointerup", onCapDragUp);
+}
+function annTargetAtY(clientY) {
+  if (!lastLayout || !lastSvg) return null;
+  const pt = lastSvg.createSVGPoint();
+  pt.x = 0; pt.y = clientY;
+  const svgY = pt.matrixTransform(lastSvg.getScreenCTM().inverse()).y;
+  for (const ws of lastLayout.workstreams)
+    if (svgY >= ws.y && svgY <= ws.yBottom) return ws.name;
+  if (lastLayout.capacity && svgY >= lastLayout.capacity.y)
+    return "@compute";
+  return null;
 }
 function onCapDragMove(e) {
   if (!capDrag) return;
   const dx = e.clientX - capDrag.grabClientX;
-  if (!capDrag.active) { if (Math.abs(dx) < 3) return; capDrag.active = true; document.body.style.cursor = "ew-resize"; document.body.style.userSelect = "none"; }
+  const dy = e.clientY - (capDrag.grabClientY || e.clientY);
+  if (!capDrag.active) { if (Math.abs(dx) < 3 && Math.abs(dy) < 3) return; capDrag.active = true; document.body.style.cursor = "ew-resize"; document.body.style.userSelect = "none"; }
   const target = snapDate(new Date(+capDrag.origDate + (dx / capDrag.pxPerDay) * DAY_MS), snapUnitFor(e));
   model = clone(capDrag.snapshot);
   if (capDrag.kind === "annotation") {
     model.annotations[capDrag.annIndex].date = isoLocal(target);
+    const newTarget = annTargetAtY(e.clientY);
+    if (newTarget) model.annotations[capDrag.annIndex].target = newTarget;
   } else {
     const cl = model.capacity[capDrag.capIndex];
     if (capDrag.kind === "retire") cl.to = isoLocal(target);
@@ -3641,12 +3830,12 @@ function onCapDragUp() {
   const cd = capDrag; capDrag = null; dragGuide = null;
   if (cd && cd.active) {
     let label;
-    if (cd.kind === "annotation") { const a = model.annotations[cd.annIndex]; label = `Move "${a.text}" → ${a.date}`; }
+    if (cd.kind === "annotation") { const a = model.annotations[cd.annIndex]; const orig = cd.snapshot.annotations[cd.annIndex]; label = a.target !== orig.target ? `Move "${a.text}" → ${a.target}, ${a.date}` : `Move "${a.text}" → ${a.date}`; }
     else { const cl = model.capacity[cd.capIndex]; label = cd.kind === "retire" ? `Retire "${cl.name}" → ${cl.to}` : `Move "${cl.name}" event → ${cl.grows[cd.growIndex].date}`; }
     recordChange({ source: "drag", verb: "replace", details: { label } });
     commitModel();
     dragJustHappened = true; setTimeout(() => { dragJustHappened = false; }, 300);
-  } else if (cd) { renderFromModel(); }
+  } else if (cd) { /* no drag happened — don't re-render (preserves dblclick target) */ }
 }
 
 // Right-click a lane → quick actions.
@@ -3835,6 +4024,7 @@ function openAnnotationModal(index, presets) {
   const a = adding
     ? { text: "", date: new Date().toISOString().slice(0, 10), target: (presets && presets.target) || "@compute", edge: (presets && presets.edge) || "bottom", icon: "↓", color: "" }
     : clone(model.annotations[index]);
+  let lastAnn = clone(a);
   const targets = [...model.workstreams.map((w) => w.name), "@compute"];
   const tgtOpts = targets.map((t) => `<option value="${esc(t)}"${t === a.target ? " selected" : ""}>${t === "@compute" ? "Compute capacity" : esc(t)}</option>`).join("");
   const edgeOpts = ["bottom", "top"].map((e) => `<option value="${e}"${(a.edge || "bottom") === e ? " selected" : ""}>${e}</option>`).join("");
@@ -3843,8 +4033,13 @@ function openAnnotationModal(index, presets) {
   if (a.color && !palette.includes(a.color)) palette.unshift(a.color);
   const swatches = palette.map((c) => `<button type="button" class="sw" data-color="${esc(c)}" style="background:${esc(c)}" title="${esc(c)}"></button>`).join("")
     + `<button type="button" class="sw sw-none" data-color="" title="Band colour">∅</button>`;
+  const headerHtml = adding ? "" :
+    `<div class="modal-header-row">` +
+      `<button type="button" class="modal-trash" id="a-delete" title="Delete annotation">&#x1F5D1;</button>` +
+      `<input id="a-text" class="modal-title-input" type="text" value="${esc(a.text)}" placeholder="e.g. Cluster A online">` +
+    `</div>`;
   const body =
-    field("Text", `<input id="a-text" type="text" value="${esc(a.text)}" placeholder="e.g. Cluster A online">`) +
+    (adding ? field("Text", `<input id="a-text" type="text" value="${esc(a.text)}" placeholder="e.g. Cluster A online">`) : "") +
     `<div class="modal-row2">` +
       field("Date", `<input id="a-date" type="date" value="${esc(a.date || "")}">`) +
       field("Icon", `<input id="a-icon" type="text" list="a-icon-list" value="${esc(a.icon || "↓")}" style="width:5em"><datalist id="a-icon-list">${icons.map((i) => `<option value="${i}">`).join("")}</datalist>`) +
@@ -3853,27 +4048,54 @@ function openAnnotationModal(index, presets) {
       field("Attach to", `<select id="a-target">${tgtOpts}</select>`) +
       field("Edge", `<select id="a-edge">${edgeOpts}</select>`) +
     `</div>` +
-    field("Colour", `<div id="a-swatches" class="sw-row">${swatches}</div><input id="a-color" type="text" value="${esc(a.color || "")}" placeholder="#hex or empty for band colour">`) +
-    (adding ? "" : `<div class="modal-del-row"><span></span><button type="button" id="a-delete" class="modal-del">Delete annotation</button></div>`);
-  openModalShell(adding ? "Add annotation" : "Edit annotation", body, save);
-  modalEl.querySelector("#a-swatches").addEventListener("click", (e) => { const b = e.target.closest(".sw"); if (b) modalEl.querySelector("#a-color").value = b.getAttribute("data-color"); });
-  if (!adding) modalEl.querySelector("#a-delete").addEventListener("click", () => {
-    const r = window.plantt.apply([{ op: "removeAnnotation", index }], "Delete annotation");
-    if (r.ok) closeModal(); else setStatus(r.error, true);
-  });
+    field("Colour", `<div id="a-swatches" class="sw-row">${swatches}</div><input id="a-color" type="text" value="${esc(a.color || "")}" placeholder="#hex or empty for band colour">`);
+
   function save() {
+    if (!modalEl) return;
     const g = (id) => modalEl.querySelector("#" + id);
-    const text = g("a-text").value.trim();
-    if (!text) { g("a-text").focus(); return; }
+    const text = (g("a-text") ? g("a-text").value.trim() : "");
+    if (!text) return;
     const icon = g("a-icon").value.trim() || "↓";
     const color = g("a-color").value.trim();
     const ann = { text, date: g("a-date").value, target: g("a-target").value, edge: g("a-edge").value, icon };
     if (color) ann.color = color;
-    const ops = adding
-      ? [{ op: "addAnnotation", annotation: ann }]
-      : [{ op: "updateAnnotation", index, set: { text, date: ann.date, target: ann.target, edge: ann.edge, icon, color: color || null } }];
-    const r = window.plantt.apply(ops, `${adding ? "Add" : "Edit"} annotation "${text}"`);
-    if (r.ok) closeModal(); else setStatus(r.error, true);
+    if (adding) {
+      const r = window.plantt.apply([{ op: "addAnnotation", annotation: ann }], `Add annotation "${text}"`);
+      if (r.ok) closeModal(); else setStatus(r.error, true);
+    } else {
+      const set = { text, date: ann.date, target: ann.target, edge: ann.edge, icon, color: color || null };
+      const fields = Object.keys(set).filter(k => JSON.stringify(set[k]) !== JSON.stringify(lastAnn[k]));
+      if (!fields.length) return;
+      const r = window.plantt.apply([{ op: "updateAnnotation", index, set }], `Edit annotation "${text}"`);
+      if (r.ok) { lastAnn = clone(ann); lastAnn.color = color || ""; }
+      else setStatus(r.error, true);
+    }
+  }
+
+  openModalShell(adding ? "Add annotation" : a.text, body, save, adding ? {} : { headerHtml, autoSave: true });
+  modalEl.querySelector("#a-swatches").addEventListener("click", (e) => {
+    const b = e.target.closest(".sw");
+    if (b) { modalEl.querySelector("#a-color").value = b.getAttribute("data-color"); if (!adding) save(); }
+  });
+  if (!adding) {
+    modalEl.querySelector("#a-delete").addEventListener("click", () => {
+      const text = a.text;
+      const r = window.plantt.apply([{ op: "removeAnnotation", index }], "Delete annotation");
+      if (r.ok) { closeModal(); showToast(`Deleted annotation "${text}" — Cmd+Z to undo`); }
+      else setStatus(r.error, true);
+    });
+    // Auto-save wiring
+    let _saveTimer = null;
+    const debouncedSave = () => { clearTimeout(_saveTimer); _saveTimer = setTimeout(save, 400); };
+    const immediateSave = () => { clearTimeout(_saveTimer); save(); };
+    for (const id of ["a-text", "a-date", "a-icon", "a-color"]) {
+      const el = modalEl.querySelector("#" + id);
+      if (el) el.addEventListener("input", debouncedSave);
+    }
+    for (const id of ["a-target", "a-edge"]) {
+      const el = modalEl.querySelector("#" + id);
+      if (el) el.addEventListener("change", immediateSave);
+    }
   }
 }
 
@@ -3888,6 +4110,20 @@ function setStatus(msg, isError) {
   el.classList.toggle("error", !!isError);
   el.classList.toggle("hidden", !msg);
   if (msg && !isError) _statusTimer = setTimeout(() => { el.textContent = ""; el.classList.add("hidden"); }, 2500);
+}
+function showToast(msg, isError) {
+  const c = document.getElementById("toast-container");
+  if (!c) return;
+  const t = document.createElement("div");
+  t.className = "toast" + (isError ? " error" : "");
+  t.textContent = msg;
+  c.appendChild(t);
+  requestAnimationFrame(() => requestAnimationFrame(() => t.classList.add("show")));
+  setTimeout(() => {
+    t.classList.remove("show");
+    t.addEventListener("transitionend", () => t.remove());
+    setTimeout(() => t.remove(), 300);
+  }, 2200);
 }
 
 // ─── CodeMirror Setup ────────────────────────────────────────────
