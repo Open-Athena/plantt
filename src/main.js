@@ -1248,7 +1248,7 @@ function renderHighlights() {
   // capture and draw chips for just the PRIMARY dragged item from its live layout.
   const dh = (dragState && dragState.active && dragHighlight) ? liveDragDateHover() : dateHover;
   if (dh) drawDateChips(dh);
-  // Dependency-chain hover → outline every item in the hovered item's chain
+  // Dependency hover → outline the hovered item and everything upstream of it
   if (depHoverChain) {
     for (const ws of lastLayout.workstreams) {
       for (const t of ws.tasks) if (depHoverChain.has(t.name)) {
@@ -1397,12 +1397,15 @@ function drawDepLayer(svg, data, layout) {
   svg.appendChild(gEdges);
 }
 
-// Hover an item → highlight its whole dependency chain (upstream + downstream).
+// Hover an item → highlight what it depends on (its transitive upstream: deps and
+// "start after" parents, recursively). Dependents and the rest of the connected
+// component stay unhighlighted — hovering a shared prerequisite must not light up
+// every task that happens to build on it.
 let depHover = null, depHoverChain = null;
 let DEP_HL = "#5f7488";
 function buildDepAdj(data) {
-  const adj = {};
-  const link = (a, b) => { (adj[a] = adj[a] || new Set()).add(b); (adj[b] = adj[b] || new Set()).add(a); };
+  const adj = {}; // item → the items it directly depends on (directed, upstream only)
+  const link = (dep, item) => { (adj[item] = adj[item] || new Set()).add(dep); };
   for (const ws of data.workstreams) {
     for (const t of ws.tasks) { const p = startParent(t); if (p) link(p, t.name); if (Array.isArray(t.deps)) for (const d of t.deps) link(d, t.name); }
     if (ws.milestones) for (const m of ws.milestones) if (Array.isArray(m.deps)) for (const d of m.deps) link(d, m.name);
